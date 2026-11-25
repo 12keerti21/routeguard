@@ -6,6 +6,9 @@ import { mapRoutes } from "../src/mapper.js"
 import { bola } from "../src/rules/bola.js"
 import { bfla } from "../src/rules/bfla.js"
 import { massAssignment } from "../src/rules/massAssignment.js"
+import { ssrf } from "../src/rules/ssrf.js"
+import { rateLimit } from "../src/rules/rateLimit.js"
+import { dataExposure } from "../src/rules/dataExposure.js"
 
 const app = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures/app")
 const routes = mapRoutes(app)
@@ -124,7 +127,37 @@ test("a routeguard-ignore comment marks the route's suppressed rules", () => {
 	assert.equal(route("GET", "/api/notes/:id").ignored, null)
 })
 
+test("SSRF flags a client-chosen URL as HIGH", () => {
+	assert.equal(ssrf(route("POST", "/int/preview"))?.severity, "HIGH")
+})
+
+test("SSRF rates a parameter inside a fixed host's URL as MEDIUM", () => {
+	assert.equal(ssrf(route("GET", "/int/weather"))?.severity, "MEDIUM")
+})
+
+test("SSRF passes a URL checked against an allow-list", () => {
+	assert.equal(ssrf(route("POST", "/int/webhook-test")), null)
+})
+
+test("rate limit flags an unlimited login and passes a limited one", () => {
+	assert.equal(rateLimit(route("POST", "/int/login"))?.rule, "RATE_LIMIT")
+	assert.equal(rateLimit(route("POST", "/int/login-limited")), null)
+})
+
+test("rate limit flags a code check behind a session, not a signed-in password change", () => {
+	assert.equal(rateLimit(route("POST", "/int/otp-verify"))?.rule, "RATE_LIMIT")
+	assert.equal(rateLimit(route("POST", "/int/change-password")), null)
+})
+
+test("data exposure flags a whole user record sent through .then", () => {
+	assert.equal(dataExposure(route("GET", "/int/people/:id"))?.rule, "DATA_EXPOSURE")
+})
+
+test("data exposure passes a query that selects fields", () => {
+	assert.equal(dataExposure(route("GET", "/int/people/:id/card")), null)
+})
+
 test("no rule fires on the public list route", () => {
 	const r = route("GET", "/api/notes")
-	assert.deepEqual([bola(r), bfla(r), massAssignment(r)], [null, null, null])
+	assert.deepEqual([bola(r), bfla(r), massAssignment(r), ssrf(r), rateLimit(r), dataExposure(r)], [null, null, null, null, null, null])
 })

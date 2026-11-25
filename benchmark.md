@@ -38,6 +38,19 @@ APIGOAT: API1 (both file routes) ✅, API3 `GET /users/:userId` ✅, API5 `POST 
 
 False positives: 0 across both targets.
 
+## SSRF, data exposure and rate limits (v0.6)
+
+| Target | Ground truth | Our tool |
+|---|---|---|
+| vulnerable-rest-api `PUT /api/users/:id` (`needle('get', req.body.url)`) | API7 SSRF | ✅ HIGH |
+| vulnerable-rest-api dev vhost `GET /api/users` | API9 old endpoint, every user | ✅ DATA_EXPOSURE HIGH |
+| vulnerable-rest-api `POST /api/auth`, `POST /api/users` | not listed: both return the whole user, password hash included | ✅ DATA_EXPOSURE HIGH |
+| APIGOAT API3 `GET /users/:userId` | API3 excessive data exposure | ✅ MEDIUM |
+| APIGOAT API7 `/weather` | API7 | ✅ MEDIUM: input inside a fixed host's URL |
+| Juice Shop `POST /profile/image/url` | known SSRF challenge | ✅ HIGH |
+| Juice Shop `POST /rest/user/login` | known brute-force exposure | ✅ RATE_LIMIT |
+| node-express-boilerplate `/v1/auth/*` | limited by `app.use('/v1/auth', authLimiter)` in another file | ✅ no finding, once array-registered routes and cross-file path guards were mapped |
+
 ## Real-world apps (false-positive check)
 
 Nine open-source Express apps, 438 routes, run 2026-11-25.
