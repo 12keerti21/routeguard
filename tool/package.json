@@ -1,7 +1,7 @@
 {
   "name": "routeguard",
-  "version": "0.6.0",
-  "description": "Map Express routes to their auth and role checks, and flag OWASP API authorisation risks",
+  "version": "1.0.0",
+  "description": "Find broken authorisation in Express APIs: maps routes to their checks and flags the OWASP API Security Top 10",
   "type": "module",
   "bin": {
     "routeguard": "bin/cli.js"
@@ -16,5 +16,31 @@
   "license": "MIT",
   "dependencies": {
     "@babel/parser": "^7.29.15"
-  }
+  },
+  "keywords": [
+    "security",
+    "owasp",
+    "api-security",
+    "express",
+    "authorization",
+    "bola",
+    "sast",
+    "static-analysis"
+  ],
+  "author": "Keerti Deshpande",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/12keerti21/routeguard.git",
+    "directory": "tool"
+  },
+  "homepage": "https://github.com/12keerti21/routeguard#readme",
+  "bugs": {
+    "url": "https://github.com/12keerti21/routeguard/issues"
+  },
+  "files": [
+    "bin",
+    "src",
+    "README.md",
+    "LICENSE"
+  ]
 }

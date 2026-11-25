@@ -24,7 +24,7 @@ DELETE  /api/users/:id       auth, admin  ✅     ✅     routes/users.js:40
 
 Tools like Semgrep and Bearer are good at injection and secrets. Authorisation bugs are different:
 the code looks fine line by line, and the flaw is a check that is *missing*. On a deliberately
-vulnerable API, Semgrep found 1 of 9 bugs and Bearer found none ([benchmark](benchmark.md)).
+vulnerable API, Semgrep found 1 of 9 bugs and Bearer found none ([benchmark](https://github.com/12keerti21/routeguard/blob/main/benchmark.md)).
 
 ## What it checks
 
@@ -73,7 +73,7 @@ jobs:
         with:
           node-version: 20
       - id: routeguard
-        uses: 12keerti21/routeguard@main
+        uses: 12keerti21/routeguard@v1
         with:
           path: .
           fail-on: HIGH
@@ -118,7 +118,7 @@ Leave out the rule name to silence every rule for that route.
 ## Results
 
 Tested on deliberately vulnerable APIs and 14 open-source Express apps (1,400+ routes). See
-[benchmark.md](benchmark.md).
+[benchmark.md](https://github.com/12keerti21/routeguard/blob/main/benchmark.md).
 
 ## Development
 
