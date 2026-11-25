@@ -5,6 +5,7 @@ const users = require("./routes/users")
 const shop = require("./routes/shop")
 const courses = require("./routes/courses")
 const integrations = require("./routes/integrations")
+const legacy = require("./routes/legacy")
 
 const app = express()
 app.use(express.json())
@@ -14,6 +15,7 @@ app.use("/api/private", auth, notes)
 app.use("/rest", shop)
 app.use("/api/courses", courses)
 app.use("/int", integrations)
+app.use("/api/v1", legacy)
 
 // a router built here and mounted under a prefix
 const v2 = express.Router().use(users)

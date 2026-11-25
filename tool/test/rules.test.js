@@ -9,6 +9,8 @@ import { massAssignment } from "../src/rules/massAssignment.js"
 import { ssrf } from "../src/rules/ssrf.js"
 import { rateLimit } from "../src/rules/rateLimit.js"
 import { dataExposure } from "../src/rules/dataExposure.js"
+import { misconfig } from "../src/rules/misconfig.js"
+import { inventory } from "../src/rules/inventory.js"
 
 const app = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures/app")
 const routes = mapRoutes(app)
@@ -155,6 +157,46 @@ test("data exposure flags a whole user record sent through .then", () => {
 
 test("data exposure passes a query that selects fields", () => {
 	assert.equal(dataExposure(route("GET", "/int/people/:id/card")), null)
+})
+
+const appWide = misconfig(app)
+const inventoried = inventory(routes, app)
+const atFile = (findings, rule, file) => findings.filter(f => f.rule === rule && f.where.startsWith(file))
+
+test("misconfig flags CORS that reflects any origin with credentials, not a fixed list", () => {
+	const cors = atFile(appWide, "CORS", "config.js")
+	assert.equal(cors.length, 1)
+	assert.equal(cors[0].severity, "HIGH")
+})
+
+test("misconfig flags JWT algorithm confusion and a key in the code", () => {
+	const jwt = atFile(appWide, "JWT", "config.js").map(f => f.message)
+	assert.ok(jwt.some(m => /algorithm confusion/.test(m)))
+	assert.ok(jwt.some(m => /key written in the code/.test(m)))
+})
+
+test("misconfig flags a stack trace in an error response", () => {
+	assert.equal(atFile(appWide, "ERROR_LEAK", "config.js")[0]?.severity, "MEDIUM")
+})
+
+test("misconfig flags an app without security headers once", () => {
+	assert.equal(appWide.filter(f => f.rule === "SECURITY_HEADERS").length, 1)
+})
+
+test("inventory flags a v1 copy of an endpoint that drops its auth", () => {
+	const shadow = inventoried.find(f => f.rule === "SHADOW_ROUTE")
+	assert.equal(shadow?.route, "GET /api/v1/notes/:id")
+})
+
+test("inventory flags a beta endpoint", () => {
+	assert.ok(inventoried.some(f => f.rule === "NON_PROD_ROUTE" && f.route === "GET /api/v1/beta/search"))
+})
+
+test("inventory lists routes the OpenAPI spec leaves out, not the ones it documents", () => {
+	const { undocumented } = inventoried.find(f => f.rule === "UNDOCUMENTED")
+	assert.ok(undocumented.includes("GET /api/users/admin/stats"))
+	assert.ok(!undocumented.includes("GET /api/notes"))
+	assert.ok(!undocumented.includes("GET /api/notes/:id"))
 })
 
 test("no rule fires on the public list route", () => {

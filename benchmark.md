@@ -51,6 +51,19 @@ False positives: 0 across both targets.
 | Juice Shop `POST /rest/user/login` | known brute-force exposure | ✅ RATE_LIMIT |
 | node-express-boilerplate `/v1/auth/*` | limited by `app.use('/v1/auth', authLimiter)` in another file | ✅ no finding, once array-registered routes and cross-file path guards were mapped |
 
+## Misconfiguration and inventory (v0.7)
+
+| Target | Ground truth | Our tool |
+|---|---|---|
+| vulnerable-rest-api dev vhost `GET /api/users`, no auth, next to the admin-only copy | API9 improper inventory | ✅ SHADOW_ROUTE HIGH |
+| vulnerable-rest-api `jwt.verify(…, { algorithms: ['RS256', 'HS256'] })` | not listed: algorithm confusion | ✅ JWT HIGH |
+| APIGOAT API8 `app.use(cors())` | API8 permissive CORS | ✅ CORS LOW (no credentials) |
+| APIGOAT API1–8 `res.status(500).json({ err })` | raw errors in responses | ✅ ERROR_LEAK LOW |
+
+Real apps: only LOW CORS and header notes, no HIGH. Noise removed on the way: CORS headers are paired
+per function (Uptime Kuma's `allowAllOrigin` sends no credentials), shadows compare only routes whose
+full path is known, and a partial spec (Juice Shop's B2B swagger) is checked under its own base path.
+
 ## Real-world apps (false-positive check)
 
 Nine open-source Express apps, 438 routes, run 2026-11-25.
