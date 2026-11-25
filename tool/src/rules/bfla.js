@@ -1,18 +1,28 @@
-import { DB_WRITE, dbCalls, readsIdentity, whereOf } from "./handler.js"
+import { DB_CALL, DB_WRITE, checksBodyCredential, dbCalls, hasRole, readsIdentity, whereOf } from "./handler.js"
+
+// res.sendFile(adminIndex): the admin page itself is public, its actions need the check
+const PAGE_ONLY = /^(sendFile|render|redirect|download|readFile|createReadStream)$/
 
 // path segments that name operator-only functions
 const SENSITIVE = /(^|\/)(admin|internal|manage|system|config|debug|metrics|logs?|keys?|secrets?|backup)(\/|$)/i
 
+// an API key or basic auth is usually issued to operators only; a user login is not
+function sensitiveSeverity(route) {
+	if (route.middleware.some(m => /api.?(key|auth)|basic/i.test(m))) return "LOW"
+	if (route.fn && dbCalls(route.fn, DB_CALL).length === 0 && dbCalls(route.fn, PAGE_ONLY).length > 0) return "LOW"
+	return "HIGH"
+}
+
 // API5: a function meant for privileged users is reachable by anyone signed in, or by anyone
 export function bfla(route) {
-	if (route.role) return null
+	if (hasRole(route)) return null
 
 	const sensitive = route.path.match(SENSITIVE)
 	if (sensitive) {
 		return {
 			rule: "BFLA",
 			owasp: "API5:2023 Broken Function Level Authorization",
-			severity: "HIGH",
+			severity: sensitiveSeverity(route),
 			route: `${route.method} ${route.path}`,
 			where: `${route.file}:${route.line}`,
 			message: `"${sensitive[2]}" names an operator function, but the route has ${route.auth ? "no role check" : "no auth or role check"}.`,
@@ -25,7 +35,7 @@ export function bfla(route) {
 	// routes with an id in the path are covered by the BOLA rule
 	if (!route.auth || route.method === "GET" || /[:{]/.test(route.path) || !route.fn) return null
 	const writes = dbCalls(route.fn, DB_WRITE)
-	if (writes.length === 0 || readsIdentity(route.fn)) return null
+	if (writes.length === 0 || readsIdentity(route.fn) || checksBodyCredential(route.fn)) return null
 
 	return {
 		rule: "BFLA",

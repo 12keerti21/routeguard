@@ -1,5 +1,5 @@
 import { walk, isMemberNode, isCallNode } from "../mapper.js"
-import { handlerParams, isMember, whereOf } from "./handler.js"
+import { handlerParams, hasRole, isMember, whereOf } from "./handler.js"
 
 const WRITE_CALL =
 	/^(create|insert|insertOne|insertMany|upsert|build|bulkCreate|update|updateOne|updateMany|findByIdAndUpdate|findOneAndUpdate|replaceOne|set|assign)$/
@@ -90,7 +90,7 @@ export function massAssignment(route) {
 		rule: "MASS_ASSIGNMENT",
 		owasp: "API3:2023 Broken Object Property Level Authorization (mass assignment)",
 		// behind a role check the caller is trusted more, but extra fields still deserve a look
-		severity: route.role ? "LOW" : privileged ? "HIGH" : "MEDIUM",
+		severity: hasRole(route) ? "LOW" : privileged ? "HIGH" : "MEDIUM",
 		route: `${route.method} ${route.path}`,
 		where: whereOf(route, sinks[0].line),
 		message: `${sinks.map(s => s.what).join(", ")} receives the whole request body, so a client can set any field${privileged ? ", including role or admin flags" : ""}.`,

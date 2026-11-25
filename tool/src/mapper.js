@@ -3,14 +3,22 @@ import path from "node:path"
 import { parse } from "@babel/parser"
 
 const METHODS = new Set(["get", "post", "put", "patch", "delete", "all", "options", "head"])
-const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", "coverage", "client", "test", "tests", "__tests__"])
+// static and frontend code holds no Express routes; juice-shop keeps challenge snippets in data/static
+const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", "coverage", "client", "frontend", "public", "static", "test", "tests", "__tests__"])
 const SOURCE = /\.(c|m)?(j|t)s$/
 
 // role checks first: "adminAuth" is a role check, not just an auth check
-const ROLE = /admin|role|permission|authori[sz]e|owner|rbac|acl|can[A-Z]|scope/i
+// isAuthorized() only checks login; authorize(ADMIN) with an argument names a role
+// isAccounting(), isStaff(): an "is" check that is not about being signed in
+const ROLE = /admin|role|permission|owner|rbac|acl|can[A-Z]|scope|^is_?(?!auth|logged|signed|valid|verified)[a-z]+$/i
 // auth('manageUsers'), permit('editor'): a guard called with the right it demands
-const PERMISSION_CALL = /(^|\.)(auth|permit|allow|can|requires?|guard)\((?!\))/i
-const AUTH = /auth|jwt|token|(^|\.)protect(ed)?\b|logged.?in|guard|verify/i
+const PERMISSION_CALL = /(^|\.)(auth|authori[sz]e|permit|allow|can|requires?|guard)\((?!\))/i
+// matched against a function's own name: isAuthenticated, checkAuth, auth.jwt, verifyToken, apiAuth
+// but not jwtChallenges or updateAuthenticatedUsers
+const AUTH =
+	/^((is|ensure|require|check|verify|validate)_?)?((api_?)?auth\w*|jwt|token|api_?key|log(ged)?_?in|protect(ed)?|guard)$|auth$/i
+// auth.required, passport.check: the last segment says little, so the whole name decides
+const GENERIC = /^(required|check|ensure|verify|middleware|guard|protect|handler|validate)$/i
 // present in the chain but enforces nothing
 const NOT_ENFORCED = /optional|initialize|session\(/i
 
@@ -84,7 +92,8 @@ function nameOf(node) {
 // catchAsync(async (req, res) => {}) and asyncHandler(getUser) wrap the real handler
 function unwrapHandler(node) {
 	if (isCallNode(node)) {
-		const inner = node.arguments.find(a => isFunctionNode(a) || a.type === "Identifier" || isMemberNode(a))
+		// asyncHandler(retrieveBasket()): the inner call is a factory, keep it for the resolver
+		const inner = node.arguments.find(a => isFunctionNode(a) || a.type === "Identifier" || isMemberNode(a) || isCallNode(a))
 		return inner ? unwrapHandler(inner) : node
 	}
 	return node
@@ -131,6 +140,7 @@ function scanFile(file) {
 		localMounts: new Map(),
 		routes: [],
 		uses: [],
+		pathUses: [],
 		functions: new Map()
 	}
 	if (!ast) return result
@@ -189,7 +199,15 @@ function scanFile(file) {
 				// app.use("/api/users", auth, users): the last identifier is the mounted router
 				const last = rest.at(-1)
 				const target = last?.type === "Identifier" ? last.name : null
-				result.mounts.push({ owner, prefix: routePath, target, middleware: flattenMiddleware(rest.slice(0, -1)), line })
+				result.mounts.push({
+					owner,
+					prefix: routePath,
+					target,
+					middleware: flattenMiddleware(rest.slice(0, -1)),
+					// app.use("/rest/basket", isAuthorized()): no router, so every argument is middleware
+					allMiddleware: flattenMiddleware(rest),
+					line
+				})
 			} else {
 				// app.use(auth) is middleware, app.use(usersRouter) mounts at "", sorted out once every file is read
 				const idents = node.arguments.filter(a => a.type === "Identifier").map(a => a.name)
@@ -226,10 +244,23 @@ function joinPath(prefix, routePath) {
 	return joined.length > 1 ? joined.replace(/\/$/, "") : joined
 }
 
+// auth.featureAccess and helpers.verify are not auth checks: judge the function's own name,
+// falling back to the whole name only when that is generic (auth.required)
+// asyncHandler(auth.jwt): the check is the wrapped argument, not the wrapper
+function matches(pattern, middleware) {
+	const open = middleware.indexOf("(")
+	const base = open === -1 ? middleware : middleware.slice(0, open)
+	const segments = base.split(".")
+	const last = segments.at(-1)
+	if (pattern.test(last) || (GENERIC.test(last) && segments.length > 1 && pattern.test(segments.at(-2)))) return true
+	const inner = open === -1 ? "" : middleware.slice(open + 1, middleware.lastIndexOf(")"))
+	return inner.split(",").some(arg => /^[\w.]+$/.test(arg.trim()) && matches(pattern, arg.trim()))
+}
+
 export function classify(middleware) {
 	const enforced = middleware.filter(m => !NOT_ENFORCED.test(m))
-	const role = enforced.some(m => ROLE.test(m) || PERMISSION_CALL.test(m))
-	const auth = role || enforced.some(m => AUTH.test(m))
+	const role = enforced.some(m => matches(ROLE, m) || PERMISSION_CALL.test(m))
+	const auth = role || enforced.some(m => matches(AUTH, m))
 	return { auth, role }
 }
 
@@ -249,7 +280,9 @@ export function mapRoutes(root) {
 			const target = scan.requires.get(mount.target)
 			if (target && byFile.has(target)) addMount(target, { parent: scan.file, ...mount })
 			// app.use("/api", api) where api is a router built in this file
-			else if (mount.target) scan.localMounts.set(mount.target, mount)
+			else if (mount.target && !scan.requires.has(mount.target) && !scan.named.has(mount.target) && !scan.functions.has(mount.target))
+				scan.localMounts.set(mount.target, mount)
+			else scan.pathUses.push({ owner: mount.owner, prefix: mount.prefix, middleware: mount.allMiddleware, line: mount.line })
 		}
 		for (const use of scan.uses) {
 			const routers = use.idents.filter(id => isRouterFile(scan.requires.get(id)))
@@ -298,9 +331,29 @@ export function mapRoutes(root) {
 		return scan.uses.filter(u => u.owner === owner && u.line < line).flatMap(u => u.middleware)
 	}
 
+	// app.use("/rest/basket", isAuthorized()) guards /rest/basket and everything under it
+	function pathScopedUses(scan, route) {
+		const covers = prefix => {
+			const pattern = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\\:\w+|:\w+/g, "[^/]+")}(/|$)`, "i")
+			return pattern.test(route.path)
+		}
+		return scan.pathUses
+			.filter(u => u.owner === route.owner && u.line <= route.line && covers(u.prefix))
+			.flatMap(u => u.middleware)
+	}
+
 	// the handler's function node and file, following controllers into the files they come from
 	function resolveHandler(scan, node) {
 		const target = unwrapHandler(node)
+		// retrieveBasket(): a factory whose returned function is the handler
+		if (isCallNode(target) && target.arguments.length === 0) {
+			const factory = resolveHandler(scan, target.callee)
+			let returned = null
+			walk(factory?.fn?.body, n => {
+				if (!returned && n.type === "ReturnStatement" && isFunctionNode(n.argument)) returned = n.argument
+			})
+			return returned ? { fn: returned, file: factory.file } : null
+		}
 		if (isFunctionNode(target)) return { fn: target, file: scan.file }
 		if (target?.type === "Identifier") {
 			if (scan.functions.has(target.name)) return { fn: scan.functions.get(target.name), file: scan.file }
@@ -326,6 +379,7 @@ export function mapRoutes(root) {
 					...ctx.middleware,
 					...local.middleware,
 					...inheritedUses(scan, route.owner, route.line),
+					...pathScopedUses(scan, route),
 					...route.middleware
 				]
 				const entry = {

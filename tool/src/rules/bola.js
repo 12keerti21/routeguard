@@ -1,5 +1,5 @@
 import { walk, isMemberNode } from "../mapper.js"
-import { RECORD_ACCESS, dbCalls, handlerParams, isMember, readsIdentity, whereOf } from "./handler.js"
+import { RECORD_ACCESS, checksBodyCredential, dbCalls, handlerParams, hasRole, isMember, scopesToCaller, whereOf } from "./handler.js"
 
 const SECRET_PARAM = /token|code|hash|secret|otp|nonce|signature|key/i
 
@@ -31,7 +31,7 @@ function usesParam(node, req, derived) {
 // API1: a record is fetched or changed by a client-supplied id, and the handler never
 // compares it with the caller, so any signed-in user can reach anyone's record
 export function bola(route) {
-	if (!/[:{]/.test(route.path) || route.role || !route.fn) return null
+	if (!/[:{]/.test(route.path) || !route.fn || hasRole(route)) return null
 	// an unauthenticated read is usually a public catalogue on purpose (books, products)
 	if (!route.auth && route.method === "GET") return null
 	// /reset/:token, /verify/:code: an unguessable secret in the URL is the authorisation
@@ -41,7 +41,7 @@ export function bola(route) {
 	const { req } = handlerParams(route.fn)
 	const derived = paramDerivedNames(route.fn, req)
 	const calls = dbCalls(route.fn, RECORD_ACCESS).filter(c => c.node.arguments.some(a => usesParam(a, req, derived)))
-	if (calls.length === 0 || readsIdentity(route.fn)) return null
+	if (calls.length === 0 || scopesToCaller(route.fn, calls, route) || checksBodyCredential(route.fn)) return null
 
 	const write = ["PUT", "PATCH", "DELETE"].includes(route.method)
 	return {
