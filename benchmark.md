@@ -30,9 +30,12 @@ Target: [vulnerable-rest-api](https://github.com/bnematzadeh/vulnerable-rest-api
 | PUT, DELETE /api/books/:id | API5 BFLA (should be admin-only) | ✅ flagged, labelled BOLA |
 | PUT, DELETE /api/authors/:id | API5 BFLA | ✅ flagged, labelled BOLA |
 | DELETE /api/users/:id | not listed, but any user can delete anyone | ✅ HIGH (real bug) |
-| POST /api/books, /api/authors | API5 BFLA | ❌ needs a BFLA rule (no id in path) |
+| POST /api/books, /api/authors | API5 BFLA | ✅ BFLA MEDIUM (v0.2) |
+| GET /api/logs, /api/system/key | not listed, but logs and a key are open to anyone | ✅ BFLA HIGH (v0.2) |
 
-APIGOAT: API1 (both file routes) ✅, API3 `GET /users/:userId` ✅, API5 `PATCH /books/:bookId` ✅. False positives: 0 after skipping unauthenticated GETs.
+APIGOAT: API1 (both file routes) ✅, API3 `GET /users/:userId` ✅, API5 `POST /books` and `PATCH /books/:bookId` ✅, API8 `GET /debug/info` ✅ (labelled BFLA; really misconfiguration). `POST /bookings` in API6 is flagged because bookings aren't tied to the user, which is a real gap, though API6's intended bug is the unthrottled flow.
+
+False positives: 0 across both targets.
 
 ## Next
 

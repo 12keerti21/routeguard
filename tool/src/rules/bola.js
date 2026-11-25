@@ -1,17 +1,5 @@
 import { walk } from "../mapper.js"
-
-// Mongoose, Sequelize, Prisma and raw query calls that load or change a record
-const DB_CALL =
-	/^(find|findOne|findById|findByPk|findUnique|findFirst|findByIdAnd(Update|Delete|Remove)|findOneAnd(Update|Delete|Remove|Replace)|update|updateOne|updateMany|delete|deleteOne|deleteMany|destroy|remove|replaceOne|query|execute)$/
-
-// where the signed-in caller's identity usually lives
-const IDENTITY_KEYS = new Set(["user", "auth", "session", "userId", "currentUser"])
-
-const isMember = (node, objectName, propertyName) =>
-	node?.type === "MemberExpression" &&
-	node.object.type === "Identifier" &&
-	node.object.name === objectName &&
-	(propertyName === undefined || node.property.name === propertyName)
+import { DB_CALL, dbCalls, handlerParams, isMember, readsIdentity } from "./handler.js"
 
 // names that carry a value from req.params: const id = req.params.id, const { id } = req.params
 function paramDerivedNames(fn, req) {
@@ -38,15 +26,6 @@ function usesParam(node, req, derived) {
 	return found
 }
 
-function readsIdentity(fn, req, res) {
-	let found = false
-	walk(fn.body, n => {
-		if (isMember(n, req) && IDENTITY_KEYS.has(n.property.name)) found = true
-		if (isMember(n, res, "locals")) found = true
-	})
-	return found
-}
-
 // API1: a record is fetched or changed by a client-supplied id, and the handler never
 // compares it with the caller, so any signed-in user can reach anyone's record
 export function bola(route) {
@@ -54,28 +33,23 @@ export function bola(route) {
 	// an unauthenticated read is usually a public catalogue on purpose (books, products)
 	if (!route.auth && route.method === "GET") return null
 
-	const [reqParam, resParam] = route.fn.params
-	const req = reqParam?.type === "Identifier" ? reqParam.name : "req"
-	const res = resParam?.type === "Identifier" ? resParam.name : "res"
+	const { req } = handlerParams(route.fn)
 	const derived = paramDerivedNames(route.fn, req)
-
-	const calls = []
-	walk(route.fn.body, node => {
-		if (node.type !== "CallExpression" || node.callee.type !== "MemberExpression") return
-		const method = node.callee.property.name
-		if (DB_CALL.test(method) && node.arguments.some(a => usesParam(a, req, derived)))
-			calls.push({ method, line: node.loc.start.line })
-	})
-	if (calls.length === 0 || readsIdentity(route.fn, req, res)) return null
+	const calls = dbCalls(route.fn, DB_CALL).filter(c => c.node.arguments.some(a => usesParam(a, req, derived)))
+	if (calls.length === 0 || readsIdentity(route.fn)) return null
 
 	const write = ["PUT", "PATCH", "DELETE"].includes(route.method)
 	return {
 		rule: "BOLA",
-		owasp: route.auth ? "API1:2023 Broken Object Level Authorization" : "API1/API2: no auth at all",
+		owasp: !route.auth
+			? "API1/API2: no auth at all"
+			: write
+				? "API1:2023 BOLA, or API5:2023 BFLA if this is a shared record only admins should change"
+				: "API1:2023 Broken Object Level Authorization",
 		severity: !route.auth || write ? "HIGH" : "MEDIUM",
 		route: `${route.method} ${route.path}`,
 		where: `${route.file}:${calls[0].line}`,
 		message: `${calls.map(c => c.method).join(", ")} uses an id from the URL, and the handler never checks it against the caller (req.user).`,
-		fix: "Scope the query to the caller, e.g. findOne({ _id: id, owner: req.user._id }), or check ownership before acting."
+		fix: "If the record has an owner, scope the query to the caller: findOne({ _id: id, owner: req.user._id }). If it is shared, add a role check such as [auth, admin]."
 	}
 }
