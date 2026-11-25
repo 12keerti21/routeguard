@@ -15,6 +15,12 @@ Exit code 2 when there are findings.
 
 - Route mapper: Express `app`/`router` routes, nested mounts, `router.use` middleware
 - Rules: BOLA (API1), BFLA (API5), mass assignment (API3)
+- BOLA follows the URL id from the handler into the services it calls (up to 4 calls deep) and
+  needs the caller to limit it on the way: in the query, in a guard that compares the caller with
+  the record, or in a check call such as `canUpdate(user, course)`
+- Suppress a reviewed finding with a comment in the three lines above the route:
+  `// routeguard-ignore BOLA` (or `// routeguard-ignore` for every rule)
+- Resolves `require`, ES imports and package.json subpath imports (`#modules/x.js`)
 - Tests: `npm test` (fixture app with vulnerable and safe routes)
 - Benchmark against Semgrep and Bearer: [benchmark.md](benchmark.md)
 

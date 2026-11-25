@@ -289,6 +289,18 @@ export function classify(middleware) {
 	return { auth, role }
 }
 
+// "// routeguard-ignore BOLA" (or every rule, with no names) in the three lines above a route
+const IGNORE = /routeguard-ignore(?:\s+([A-Z_, ]+))?/
+const fileLines = new Map()
+
+function ignoredRules(file, line) {
+	if (!fileLines.has(file)) fileLines.set(file, readFileSync(file, "utf8").split("\n"))
+	const above = fileLines.get(file).slice(Math.max(0, line - 4), line).join("\n")
+	const match = above.match(IGNORE)
+	if (!match) return null
+	return match[1] ? new Set(match[1].split(/[\s,]+/).filter(Boolean)) : "all"
+}
+
 export function mapRoutes(root) {
 	loadSubpathImports(root)
 	const scans = listSourceFiles(root).map(scanFile)
@@ -395,6 +407,14 @@ export function mapRoutes(root) {
 		return null
 	}
 
+	// the function a call in `file` names: getCourseShares(...), courseService.getCourse(...)
+	function resolveCallee(file, callee) {
+		const scan = byFile.get(file)
+		if (!scan || !callee) return null
+		const found = resolveHandler(scan, callee)
+		return found?.fn?.body ? found : null
+	}
+
 	const routes = []
 	for (const scan of scans) {
 		for (const route of scan.routes) {
@@ -420,6 +440,11 @@ export function mapRoutes(root) {
 				// kept off JSON output: rules read the handler's AST
 				Object.defineProperty(entry, "fn", { value: handler?.fn?.body ? handler.fn : null })
 				Object.defineProperty(entry, "fnFile", { value: path.relative(root, handler?.file ?? scan.file) })
+				Object.defineProperty(entry, "fnPath", { value: handler?.file ?? scan.file })
+				// lets rules follow a call from the handler into the function it names
+				Object.defineProperty(entry, "resolve", { value: resolveCallee })
+				Object.defineProperty(entry, "root", { value: root })
+				Object.defineProperty(entry, "ignored", { value: ignoredRules(scan.file, route.line) })
 				routes.push(entry)
 			}
 		}

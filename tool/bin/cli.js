@@ -17,7 +17,8 @@ if (!target) {
 }
 
 const routes = mapRoutes(path.resolve(target))
-const findings = routes.flatMap(r => RULES.map(rule => rule(r)).filter(Boolean))
+const suppressed = (route, finding) => route.ignored === "all" || route.ignored?.has(finding.rule)
+const findings = routes.flatMap(r => RULES.map(rule => rule(r)).filter(f => f && !suppressed(r, f)))
 
 if (json) {
 	console.log(JSON.stringify({ routes, findings }, null, 2))

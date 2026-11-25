@@ -1,5 +1,7 @@
+import path from "node:path"
 import { walk, isMemberNode } from "../mapper.js"
-import { RECORD_ACCESS, checksBodyCredential, dbCalls, handlerParams, hasRole, isMember, scopesToCaller, whereOf } from "./handler.js"
+import { traceRoute } from "../flow.js"
+import { RECORD_ACCESS, checksBodyCredential, dbCalls, handlerParams, hasRole, isMember, whereOf } from "./handler.js"
 
 const SECRET_PARAM = /token|code|hash|secret|otp|nonce|signature|key/i
 
@@ -41,7 +43,14 @@ export function bola(route) {
 	const { req } = handlerParams(route.fn)
 	const derived = paramDerivedNames(route.fn, req)
 	const calls = dbCalls(route.fn, RECORD_ACCESS).filter(c => c.node.arguments.some(a => usesParam(a, req, derived)))
-	if (calls.length === 0 || scopesToCaller(route.fn, calls, route) || checksBodyCredential(route.fn)) return null
+	if (checksBodyCredential(route.fn)) return null
+
+	// follow the id into the services it reaches; the caller must limit it somewhere on the way
+	const trace = traceRoute(route)
+	if (trace.scoped === true || (trace.scoped === null && trace.trusted)) return null
+	if (trace.scoped === null && calls.length === 0) return null
+	const at = trace.at
+	const via = at?.chain.length ? ` via ${at.chain.join(" → ")}` : ""
 
 	const write = ["PUT", "PATCH", "DELETE"].includes(route.method)
 	return {
@@ -53,8 +62,8 @@ export function bola(route) {
 				: "API1:2023 Broken Object Level Authorization",
 		severity: !route.auth || write ? "HIGH" : "MEDIUM",
 		route: `${route.method} ${route.path}`,
-		where: whereOf(route, calls[0].line),
-		message: `${calls.map(c => c.method).join(", ")} uses an id from the URL, and the handler never checks it against the caller (req.user).`,
+		where: at ? `${path.relative(route.root, at.file)}:${at.line}` : whereOf(route, calls[0].line),
+		message: `${at?.method ?? calls.map(c => c.method).join(", ")}${via} uses an id from the URL, and nothing on the way checks it against the caller.`,
 		fix: "If the record has an owner, scope the query to the caller: findOne({ _id: id, owner: req.user._id }). If it is shared, add a role check such as [auth, admin]."
 	}
 }

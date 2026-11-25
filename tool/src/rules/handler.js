@@ -95,18 +95,6 @@ export function readsIdentity(fn) {
 	return names.size > 0 || contains(fn.body)
 }
 
-// the caller limits the record: it is in the query, or in a condition that guards it.
-// Reading req.user somewhere else (a log line, a challenge check) does not count.
-export function scopesToCaller(fn, calls, route) {
-	const { contains } = identity(fn, route)
-	if (calls.some(c => c.node.arguments.some(contains))) return true
-	let guarded = false
-	walk(fn.body, n => {
-		if ((n.type === "IfStatement" || n.type === "ConditionalExpression") && contains(n.test)) guarded = true
-	})
-	return guarded
-}
-
 const ROLE_CALL = /^(require|assert|ensure|check|verify)_?(admin|role|permission|staff|owner)|^is_?(admin|staff|owner)$|^has_?(role|permission)|^authori[sz]e$|^can[A-Z]/i
 const ROLE_FIELD = /^(is_?admin|admin|role|roles|permissions?|is_?staff)$/i
 
