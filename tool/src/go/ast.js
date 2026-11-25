@@ -36,10 +36,16 @@ export function parseGo(file) {
 	}
 }
 
+// depth-first, in source order; iterative, because generated code can nest deeper than the call stack
 export function walk(node, visit) {
 	if (!node) return
-	if (visit(node) === false) return
-	for (const child of node.namedChildren) walk(child, visit)
+	const stack = [node]
+	while (stack.length) {
+		const n = stack.pop()
+		if (visit(n) === false) continue
+		const children = n.namedChildren
+		for (let i = children.length - 1; i >= 0; i--) stack.push(children[i])
+	}
 }
 
 export const field = (node, name) => node?.childForFieldName(name) ?? null

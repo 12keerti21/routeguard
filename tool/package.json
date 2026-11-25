@@ -1,7 +1,7 @@
 {
   "name": "routeguard-cli",
-  "version": "2.0.0",
-  "description": "Find broken authorisation in Express and Go APIs: maps routes to their checks and flags the OWASP API Security Top 10",
+  "version": "2.1.0",
+  "description": "Find broken authorisation in Express, Go and Python APIs: maps routes to their checks and flags the OWASP API Security Top 10",
   "type": "module",
   "bin": {
     "routeguard": "bin/cli.js"
@@ -30,6 +30,10 @@
     "echo",
     "fiber",
     "chi",
+    "python",
+    "flask",
+    "fastapi",
+    "django",
     "authorization",
     "bola",
     "sast",

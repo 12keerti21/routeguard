@@ -191,7 +191,7 @@ function candidates(routes, findings, allowWrites) {
 	return routes.filter(r => {
 		const key = `${r.method} ${r.path}`
 		// ALL (a Go handler that takes any method) is replayed as a read only
-		if (seen.has(key) || /[*<]/.test(r.path) || r.method === "OPTIONS" || r.method === "HEAD" || (r.method === "ALL" && r.lang !== "go")) return false
+		if (seen.has(key) || /[*<]/.test(r.path) || r.method === "OPTIONS" || r.method === "HEAD" || (r.method === "ALL" && !["go", "py"].includes(r.lang))) return false
 		if (WRITE.has(r.method) && !allowWrites) return false
 		const takesId = /[:{]/.test(r.path)
 		const operator = ["BFLA"].includes(flagged.get(key))
@@ -240,7 +240,9 @@ export async function verify({ routes, findings, baseUrl, config, allowWrites = 
 		answers.push({ route, url, owner, other, anonymous })
 		let verdict = judge(route, staticRule, owner, other, anonymous, url)
 		// an id the other user can also list may be theirs to read, so reading it proves nothing
-		const shared = Object.values(found.sources).filter(d => !d.ownerOnly)
+		// ids the config gives are the tester's choice; only discovered ones can be shared by accident
+		const given = { ...params, ...(settings.routes?.[key] ?? settings.routes?.[route.path] ?? {}) }
+		const shared = Object.values(found.sources).filter(d => !d.ownerOnly && !(d.param in given))
 		if (verdict.verdict === "CONFIRMED" && /owner's data/.test(verdict.reason) && shared.length)
 			verdict = { verdict: "INCONCLUSIVE", reason: `the other user can also list :${shared.map(d => d.param).join(", :")}, so reading it may be allowed; give an id only the owner has` }
 		results.push({ route: key, path: url, staticRule, ...verdict, status: { owner: owner?.status, other: other.status, anonymous: anonymous.status } })

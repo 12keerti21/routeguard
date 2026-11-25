@@ -7,11 +7,12 @@ import { randomUUID } from "node:crypto"
 const OK = status => status >= 200 && status < 300
 const PROBE_ORIGIN = "https://routeguard-probe.invalid"
 // fields that must never reach a client; their values are never printed
-const SECRET_FIELD = /^(password|passwd|password_?hash|hash(ed)?_?password|salt|secret|client_?secret|api_?key|private_?key|refresh_?token|reset_?token|otp|otp_?hash|totp_?secret|mfa_?secret|ssn)$/i
+const SECRET_FIELD = /^(password|passwd|password_?hash|hash(ed)?_?password|salt|client_?secret|api_?key|private_?key|refresh_?token|reset_?token|otp|otp_?hash|totp_?secret|mfa_?secret|ssn)$/i
 // routes that hand out tokens on purpose; only their token fields are let through
 const ISSUES_TOKENS = /login|signin|sign-in|token|auth|refresh|session|verify|otp/i
 // Node, Go, Python and Java stack traces, and database driver errors
 const STACK_TRACE = /\n\s+at \S+.*\(?\/?[\w./-]+:\d+:\d+\)?|node_modules\/|(CastError|MongoServerError|ValidationError|SequelizeDatabaseError|QueryFailedError|PrismaClientKnownRequestError|ER_PARSE_ERROR|SyntaxError: Unexpected|goroutine \d+ \[|\.go:\d+ \+0x|Traceback \(most recent call last\)|\n\s+at [\w.$]+\([\w.]+\.java:\d+\)|pq: |SQLSTATE|sql: )/
+const SIDE_EFFECT = /create|delete|remove|reset|init|seed|drop|logout|log-out|signout|populate|run|exec|trigger|send|sync|restart|shutdown|clear|flush|purge|import|backup|migrate|install|setup|refresh|revoke|approve|cancel|confirm|activate|unsubscribe/i
 const MALFORMED_ID = `rg'"<probe>${"9".repeat(40)}`
 
 const result = (probe, route, verdict, reason, staticRule = null) => ({ route, staticRule, verdict, reason, probe })
@@ -58,7 +59,8 @@ function securityHeaders({ answers, baseUrl }) {
 async function dataExposure({ answers, routes, headers, send, prefix }) {
 	const hits = []
 	const replayed = new Set(answers.map(a => `${a.route.method} ${a.route.path}`))
-	const extra = routes.filter(r => r.method === "GET" && !/[:{*<]/.test(r.path) && !replayed.has(`${r.method} ${r.path}`)).slice(0, 20)
+	// a GET named like an action may still do it: /createdb, /logout, /reset
+	const extra = routes.filter(r => r.method === "GET" && !/[:{*<]/.test(r.path) && !SIDE_EFFECT.test(r.path) && !replayed.has(`${r.method} ${r.path}`)).slice(0, 20)
 	const reads = [...answers]
 	for (const route of extra) {
 		const url = prefix + route.path
@@ -146,7 +148,8 @@ async function devRoutes({ routes, findings, fill, send }) {
 async function rateLimits({ routes, findings, fill, send, probes }) {
 	const attempts = probes.attempts ?? 20
 	const flagged = new Set(findings.filter(f => f.rule === "RATE_LIMIT").map(f => f.route))
-	const targets = routes.filter(r => flagged.has(`${r.method} ${r.path}`)).slice(0, 5)
+	// sign-up routes would create real accounts, so they are left out
+	const targets = routes.filter(r => flagged.has(`${r.method} ${r.path}`) && !/register|sign-?up|join|create/i.test(r.path)).slice(0, 5)
 	const out = []
 	for (const route of targets) {
 		const { path, missing } = fill(route)

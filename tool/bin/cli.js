@@ -17,10 +17,20 @@ import { verify } from "../src/verify.js"
 import { mapGoRoutes } from "../src/go/mapper.js"
 import { GO_RULES } from "../src/go/rules.js"
 import { goAppRules } from "../src/go/app.js"
+import { mapPyRoutes } from "../src/py/mapper.js"
+import { PY_RULES } from "../src/py/rules.js"
+import { pyAppRules } from "../src/py/app.js"
 
 const RULES = [bola, bfla, massAssignment, dataExposure, ssrf, rateLimit, businessFlow]
 // Go handlers get their own code checks; the path-only checks are shared
 const RULES_GO = [...GO_RULES, bfla, rateLimit, businessFlow]
+const RULES_PY = [...PY_RULES, bfla, rateLimit, businessFlow]
+const PY_FIX = {
+	RATE_LIMIT: "Add a limiter keyed on the caller and the account, e.g. Flask-Limiter, slowapi or DRF throttle classes, on this route.",
+	BUSINESS_FLOW: "Limit per account and per device (Flask-Limiter, slowapi, DRF throttling), add a captcha or a queue for the flow, and alert on bursts.",
+	BFLA: "Add a role check (an admin-only decorator, dependency or permission class), or remove the route from production.",
+	NON_PROD_ROUTE: "Remove it from production builds, or register it only when DEBUG or a development setting is on."
+}
 // the shared checks suggest Express middleware; Go apps get Go advice
 const GO_FIX = {
 	RATE_LIMIT: "Add a limiter keyed on the caller and the account, e.g. golang.org/x/time/rate or a middleware such as ulule/limiter, on this route.",
@@ -61,12 +71,19 @@ function goAdvice(route, f) {
 		return { ...out, severity: "LOW", message: `${out.message} It is registered only when ${route.conditional} holds.` }
 	return out
 }
+function pyAdvice(route, f) {
+	const out = PY_FIX[f.rule] ? { ...f, fix: PY_FIX[f.rule] } : f
+	if (route.py.conditional && ["BFLA", "NON_PROD_ROUTE"].includes(f.rule) && f.severity !== "LOW")
+		return { ...out, severity: "LOW", message: `${out.message} It is registered only when ${route.py.conditional} holds.` }
+	return out
+}
 const jsRoutes = mapRoutes(path.resolve(target))
 const goRoutes = await mapGoRoutes(path.resolve(target))
-const routes = [...jsRoutes, ...goRoutes]
+const pyRoutes = await mapPyRoutes(path.resolve(target))
+const routes = [...jsRoutes, ...goRoutes, ...pyRoutes]
 const other = Object.entries(jsRoutes.frameworks).filter(([f]) => f !== "express").sort((a, b) => b[1] - a[1])
-if (goRoutes.length === 0 && other.length && other[0][1] > (jsRoutes.frameworks.express ?? 0))
-	console.error(`warning: this looks like a ${other[0][0]} app (${other[0][1]} files, ${jsRoutes.frameworks.express ?? 0} using Express). routeguard reads Express and Go routes only, so these results are unreliable.`)
+if (goRoutes.length === 0 && pyRoutes.length === 0 && other.length && other[0][1] > (jsRoutes.frameworks.express ?? 0))
+	console.error(`warning: this looks like a ${other[0][0]} app (${other[0][1]} files, ${jsRoutes.frameworks.express ?? 0} using Express). routeguard reads Express, Go and Python routes only, so these results are unreliable.`)
 const suppressed = (route, finding) => route.ignored === "all" || route.ignored?.has(finding.rule)
 // a router mounted twice reports the same code twice
 const seen = new Set()
@@ -74,10 +91,12 @@ const root = path.resolve(target)
 const findings = [
 	...jsRoutes.flatMap(r => RULES.map(rule => rule(r)).filter(f => f && !suppressed(r, f))),
 	...goRoutes.flatMap(r => RULES_GO.map(rule => rule(r)).filter(f => f && !suppressed(r, f)).map(f => goAdvice(r, f))),
+	...pyRoutes.flatMap(r => RULES_PY.map(rule => rule(r)).filter(f => f && !suppressed(r, f)).map(f => pyAdvice(r, f))),
 	// checks that look at the app as a whole, not one route
-	...inventory(routes, root).map(f => (goRoutes.length && !jsRoutes.length && GO_FIX[f.rule] ? { ...f, fix: GO_FIX[f.rule] } : f)),
-	...(jsRoutes.length || !goRoutes.length ? [...misconfig(root), ...consumption(root)] : []),
-	...(goRoutes.length ? goAppRules(goRoutes) : [])
+	...inventory(routes, root).map(f => (!jsRoutes.length && (goRoutes.length ? GO_FIX : pyRoutes.length ? PY_FIX : {})[f.rule] ? { ...f, fix: (goRoutes.length ? GO_FIX : PY_FIX)[f.rule] } : f)),
+	...(jsRoutes.length || (!goRoutes.length && !pyRoutes.length) ? [...misconfig(root), ...consumption(root)] : []),
+	...(goRoutes.length ? goAppRules(goRoutes) : []),
+	...(pyRoutes.length ? pyAppRules(pyRoutes) : [])
 ].filter(f => !seen.has(`${f.rule} ${f.route} ${f.where}`) && seen.add(`${f.rule} ${f.route} ${f.where}`))
 
 function printReport() {

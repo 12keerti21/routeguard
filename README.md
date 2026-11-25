@@ -1,8 +1,8 @@
 # routeguard
 
-**Find broken authorisation in Express and Go APIs before attackers do.**
+**Find broken authorisation in Express, Go and Python APIs before attackers do.**
 
-routeguard reads your Express or Go code without running it. It maps every route to the checks that protect
+routeguard reads your Express, Go or Python code without running it. It maps every route to the checks that protect
 it, then flags the [OWASP API Security Top 10](https://owasp.org/API-Security/editions/2023/en/0x11-t10/)
 risks that general code scanners miss. The biggest of these is one user reaching another user's data.
 
@@ -24,7 +24,7 @@ DELETE  /api/users/:id       auth, admin  ✅     ✅     routes/users.js:40
 
 Tools like Semgrep and Bearer are good at injection and secrets. Authorisation bugs are different:
 the code looks fine line by line, and the flaw is a check that is *missing*. On a deliberately
-vulnerable API, Semgrep found 1 of 9 bugs and Bearer found none ([benchmark](https://github.com/12keerti21/routeguard/blob/main/benchmark.md)).
+vulnerable API, Semgrep found 1 of 9 bugs, Bearer found none and routeguard found 6 ([benchmark](https://github.com/12keerti21/routeguard/blob/main/benchmark.md)).
 
 ## What it checks
 
@@ -64,7 +64,15 @@ Requires Node 20 or later, and no Go toolchain. It reads:
   as `"GET /items/{id}"`). Routers are followed through groups, sub-routers, mounts, routers kept in
   struct fields and routers passed to other packages; middleware is read from `Use`, group arguments,
   wrapped handlers (`auth(h)`) and wrapped muxes (`auth(mux)`), and auth checks made first thing in a
-  handler count too. Go code is parsed with tree-sitter, so a repo with both languages gets both.
+  handler count too.
+- **Python**: Flask (blueprints, `add_url_rule`, Flask-RESTful and RESTX resources, MethodView, and
+  connexion's OpenAPI `operationId` routes), FastAPI (`include_router` prefixes, router and route
+  dependencies, `Depends` and `Annotated` parameters, class-based controllers) and Django with Django REST
+  Framework (`ROOT_URLCONF`, `include`, routers and ViewSets, `@action`, generic views, permission
+  classes and `DEFAULT_PERMISSION_CLASSES`, login and permission decorators and mixins).
+
+Go and Python are parsed with tree-sitter, so no Go or Python install is needed, and a repository with
+several languages gets all of them.
 
 ### Confirm findings against a running app
 
@@ -205,13 +213,14 @@ Leave out the rule name to silence every rule for that route.
 - Static analysis trusts what a check returns. If `canEdit()` itself has a logic bug, only `verify` against a running app will show it.
 - Probes only see what the sampled routes return: a clean result means none of those leaked, not that no route does.
 - Static analysis cannot know an id is unguessable. Capability links need a `routeguard-ignore` comment.
-- Express and Go only for now. Other Node frameworks (Fastify, NestJS, Koa) get a warning instead of results.
+- Express, Go and Python only for now. Other Node frameworks (Fastify, NestJS, Koa) get a warning instead of results.
+- Python routes registered through a project's own routing layer, or added dynamically, may be missed.
 - Go routes registered from data at runtime, or through a project's own routing layer, may be missed or left with an unresolved `<prefix>`.
 
 ## Results
 
-Tested on deliberately vulnerable APIs, 18 open-source Express apps (about 1,950 routes) and 14 Go
-apps (about 3,150 routes). See
+Tested on deliberately vulnerable APIs, 18 open-source Express apps (about 1,950 routes), 14 Go apps
+(about 3,150 routes) and 14 Python apps (about 2,080 routes). See
 [benchmark.md](https://github.com/12keerti21/routeguard/blob/main/benchmark.md).
 
 ## Development

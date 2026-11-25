@@ -8,20 +8,22 @@ How well routeguard finds real authorisation bugs, and how much noise it makes o
 Each was checked by hand, then scanned with Semgrep (`p/security-audit` and `p/owasp-top-ten`, 233 rules)
 and Bearer (88 rules).
 
-| Bug | OWASP API 2023 | Semgrep | Bearer |
-|---|---|---|---|
-| Any user reads another user's book secret | API1 BOLA | ❌ | ❌ |
-| Register as admin with `"admin": true` | API3 Mass assignment | ❌ | ❌ |
-| Change another user's password | API1 BOLA | ❌ | ❌ |
-| SQL injection in user lookup | API8 Injection | ❌ | ❌ |
-| Debug endpoint lists every user and password | API3 Data exposure | ❌ | ❌ |
-| User and password enumeration | API2 Broken authentication | ❌ | ❌ |
-| Regex denial of service on email update | API4 Resource consumption | ❌ | ❌ |
-| No rate limit on login | API4 Resource consumption | ❌ | ❌ |
-| Weak JWT signing key | API2 Broken authentication | ✅ | ❌ |
-| **Found** | | **1 of 9** | **0 of 9** |
+| Bug | OWASP API 2023 | Semgrep | Bearer | routeguard |
+|---|---|---|---|---|
+| Any user reads another user's book secret | API1 BOLA | ❌ | ❌ | ✅ |
+| Register as admin with `"admin": true` | API3 Mass assignment | ❌ | ❌ | ✅ |
+| Change another user's password | API1 BOLA | ❌ | ❌ | ✅ |
+| SQL injection in user lookup | API8 Injection | ❌ | ❌ | ❌ (not an authorisation check) |
+| Debug endpoint lists every user and password | API3 Data exposure | ❌ | ❌ | ✅ |
+| User and password enumeration | API2 Broken authentication | ❌ | ❌ | ❌ |
+| Regex denial of service on email update | API4 Resource consumption | ❌ | ❌ | ❌ |
+| No rate limit on login | API4 Resource consumption | ❌ | ❌ | ✅ |
+| Weak JWT signing key | API2 Broken authentication | ✅ | ❌ | ✅ |
+| **Found** | | **1 of 9** | **0 of 9** | **6 of 9** |
 
-VAmPI is written in Python, so routeguard (Express only) was measured on the Express targets below.
+routeguard reads VAmPI's routes from its OpenAPI spec (connexion) and also flags `app.run(debug=True)`.
+Run live, `verify` confirmed the book BOLA (a second user read the first user's book), the password
+leak on the debug endpoint, a Python traceback on a malformed id, and the missing login limit.
 
 ## 2. routeguard on vulnerable Express APIs
 
@@ -184,4 +186,43 @@ routeguard agrees.
 
 Scanning all 14 Go apps (about 3,150 routes) takes about 30 seconds on a laptop. Routes behind a
 setting (`if setting.EnablePprof { ... }`) are reported LOW and say which setting.
+
+## 6. Python
+
+Flask (with blueprints, Flask-RESTful and connexion), FastAPI and Django REST Framework.
+
+**Deliberately vulnerable apps.** VAmPI: 6 of 9 (section 1). we45's Vulnerable Flask App: both
+customer lookups by id (one by URL, one by an id in the JSON body), the card numbers they return, a JWT
+decoded without verifying the signature and a secret key in the code. OWASP crAPI's Django workshop:
+the documented mechanic-report BOLA (`?report_id=`), service requests any mechanic can change, a JWT
+decoded without verification and `debug=True`. The Django RealWorld example: articles any user can
+update and comments any user can delete, both known gaps in that example.
+
+**Open-source Python apps:**
+
+| App | Framework | Routes | HIGH | MEDIUM | LOW |
+|---|---|---|---|---|---|
+| [NetBox](https://github.com/netbox-community/netbox) | Django REST Framework | 948 | 0 | 1 | 3 |
+| [Mealie](https://github.com/mealie-recipes/mealie) | FastAPI | 285 | 0 | 4 | 4 |
+| [CTFd](https://github.com/CTFd/CTFd) | Flask | 245 | 2 | 0 | 7 |
+| [Healthchecks](https://github.com/healthchecks/healthchecks) | Django | 178 | 0 | 1 | 9 |
+| [Redash](https://github.com/getredash/redash) | Flask-RESTful | 126 | 1 | 4 | 5 |
+| [Paperless-ngx](https://github.com/paperless-ngx/paperless-ngx) | Django REST Framework | 110 | 0 | 2 | 3 |
+| [Wagtail](https://github.com/wagtail/wagtail) | Django | 62 | 0 | 0 | 3 |
+| [Full Stack FastAPI Template](https://github.com/tiangolo/full-stack-fastapi-template) | FastAPI | 23 | 0 | 3 | 1 |
+| [Django RealWorld](https://github.com/gothinkster/django-realworld-example-app) | Django REST Framework | 21 | 4 | 2 | 2 |
+| [FastAPI RealWorld](https://github.com/nsidnev/fastapi-realworld-example-app) | FastAPI | 19 | 0 | 1 | 2 |
+
+| Finding | Verdict |
+|---|---|
+| CTFd: `app.run(debug=True)` in `serve.py` and `wsgi.py` | Real, but only when started by hand for development |
+| Redash: `GET /api/config` without auth | By design: the browser client needs it |
+| Redash: query API keys in alert and dashboard answers | Arguable: users with access to the query may use its key |
+| FastAPI template, Mealie, Paperless, NetBox: login, reset and TOTP routes with no rate limit | Real or arguable: some limit at the proxy |
+
+Every HIGH and MEDIUM was read by hand; none was a plain false positive. The rules know the patterns
+these apps use to stay safe: DRF querysets restricted in a base view, repositories built per group,
+`get_by_id_and_org(id, current_org)`, `require_admin_or_owner(record.user_id)`, ownership comparisons,
+object permission classes, signed badge links and settings-guarded debug views. Scanning the ten apps
+(2,081 Python routes across all fourteen targets) takes about 8 seconds.
 

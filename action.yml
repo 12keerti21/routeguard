@@ -1,12 +1,12 @@
 name: routeguard API authorisation scan
-description: Map Express and Go API routes to their auth checks and flag OWASP API Top 10 authorisation risks
+description: Map Express, Go and Python API routes to their auth checks and flag OWASP API Top 10 authorisation risks
 branding:
   icon: shield
   color: blue
 
 inputs:
   path:
-    description: Folder of the Express or Go app to scan
+    description: Folder of the Express, Go or Python app to scan
     default: "."
   fail-on:
     description: Fail the step for findings at or above this severity (LOW, MEDIUM, HIGH)
