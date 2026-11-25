@@ -2,6 +2,7 @@
 // Static analysis says where a check looks missing; this says whether another user really gets in.
 import { createHash, generateKeyPairSync, randomUUID, sign } from "node:crypto"
 import readline from "node:readline/promises"
+import { discoverParams } from "./discover.js"
 
 const WRITE = new Set(["PUT", "PATCH", "DELETE", "POST"])
 const OK = status => status >= 200 && status < 300
@@ -192,9 +193,19 @@ export async function verify({ routes, findings, baseUrl, config, allowWrites = 
 	}
 	if (!headers.owner || !headers.other) throw new Error("the config needs users.owner and users.other")
 
+	// ids the config leaves out are looked up from the app's own list routes, unless "discover": false
+	const params = settings.params ?? {}
+	let discovered = []
+	let perRoute = new Map()
+	if (settings.discover !== false) {
+		const fetchAs = (who, url) => call(baseUrl, "GET", prefix + url, headers[who]("GET", prefix + url), undefined, timeoutMs)
+		;({ perRoute, notes: discovered } = await discoverParams({ routes, known: params, fetchAs }))
+	}
+
 	const results = []
 	for (const { route, staticRule } of candidates(routes, findings, allowWrites)) {
-		const { path, missing } = fillPath(route, settings.params ?? {}, settings.routes ?? {})
+		const found = perRoute.get(route.path) ?? { values: {}, sources: {} }
+		const { path, missing } = fillPath(route, { ...found.values, ...params }, settings.routes ?? {})
 		const key = `${route.method} ${route.path}`
 		if (missing.length) {
 			results.push({ route: key, staticRule, verdict: "SKIPPED", reason: `no value for :${missing.join(", :")}` })
@@ -206,8 +217,14 @@ export async function verify({ routes, findings, baseUrl, config, allowWrites = 
 		const owner = WRITE.has(route.method) ? null : await call(baseUrl, route.method, url, headers.owner(route.method, url), body, timeoutMs)
 		const other = await call(baseUrl, route.method, url, headers.other(route.method, url), body, timeoutMs)
 		const anonymous = await call(baseUrl, route.method, url, {}, body, timeoutMs)
-		results.push({ route: key, path: url, staticRule, ...judge(route, staticRule, owner, other, anonymous, url), status: { owner: owner?.status, other: other.status, anonymous: anonymous.status } })
+		let verdict = judge(route, staticRule, owner, other, anonymous, url)
+		// an id the other user can also list may be theirs to read, so reading it proves nothing
+		const shared = Object.values(found.sources).filter(d => !d.ownerOnly)
+		if (verdict.verdict === "CONFIRMED" && /owner's data/.test(verdict.reason) && shared.length)
+			verdict = { verdict: "INCONCLUSIVE", reason: `the other user can also list :${shared.map(d => d.param).join(", :")}, so reading it may be allowed; give an id only the owner has` }
+		results.push({ route: key, path: url, staticRule, ...verdict, status: { owner: owner?.status, other: other.status, anonymous: anonymous.status } })
 	}
+	Object.defineProperty(results, "discovered", { value: discovered })
 	return results
 }
 

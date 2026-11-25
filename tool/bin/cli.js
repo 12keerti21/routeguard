@@ -79,6 +79,12 @@ function printReport() {
 }
 
 function printVerification(results) {
+	if (results.discovered?.length) {
+		console.log("Ids found from the app's own lists:")
+		for (const d of results.discovered)
+			console.log(`  :${d.param} = ${d.value}  (${d.from}${d.ownerOnly ? ", the owner's only" : ", also visible to the other user"})`)
+		console.log("")
+	}
 	const order = { CONFIRMED: 0, INCONCLUSIVE: 1, PUBLIC: 2, PROTECTED: 3, SKIPPED: 4 }
 	const sorted = [...results].sort((a, b) => order[a.verdict] - order[b.verdict])
 	for (const r of sorted) {

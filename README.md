@@ -75,11 +75,15 @@ npx routeguard-cli verify ./my-api --base-url http://localhost:3000 --config ver
     "owner": { "login": { "path": "/api/login", "body": { "email": "alice@test.local", "password": "${ALICE_PASSWORD}" }, "token": "token" } },
     "other": { "headers": { "Authorization": "Bearer ${BOB_TOKEN}" } }
   },
-  "params": { "id": "42" },
   "routes": { "/api/cards/:id": { "id": "7" } }
 }
 ```
 
+- **Ids are found for you.** For a route like `/notes/:id`, routeguard reads `GET /notes` as both users
+  and picks an id only the owner sees, so the test uses a record that is really the owner's. Nested
+  routes are filled one level at a time. Ids in `params` (by name) or `routes` (per route) win, and
+  `"discover": false` turns this off. When the only id is one both users can list, a matching answer is
+  reported as inconclusive, since reading a shared record may be allowed.
 - `owner` owns the ids in `params`; `other` is a second ordinary user. `${NAME}` reads environment
   variables, so passwords stay out of the file.
 - Every route that takes an id, and every operator route a static finding flagged, is requested as the
