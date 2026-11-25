@@ -60,6 +60,35 @@ node bin/cli.js <path-to-express-app> --fail-on HIGH  # exit 2 only on HIGH find
 Requires Node 20 or later. Works with JavaScript and TypeScript, `require` and `import`, monorepos and
 package.json `#imports`.
 
+### Confirm findings against a running app
+
+Static analysis says where a check *looks* missing. `verify` proves it: it replays routes against a
+running test instance as two real users and compares the answers.
+
+```bash
+npx routeguard-cli verify ./my-api --base-url http://localhost:3000 --config verify.json
+```
+
+```json
+{
+  "users": {
+    "owner": { "login": { "path": "/api/login", "body": { "email": "alice@test.local", "password": "${ALICE_PASSWORD}" }, "token": "token" } },
+    "other": { "headers": { "Authorization": "Bearer ${BOB_TOKEN}" } }
+  },
+  "params": { "id": "42" },
+  "routes": { "/api/cards/:id": { "id": "7" } }
+}
+```
+
+- `owner` owns the ids in `params`; `other` is a second ordinary user. `${NAME}` reads environment
+  variables, so passwords stay out of the file.
+- Every route that takes an id, and every operator route a static finding flagged, is requested as the
+  owner, as the other user and with no credentials.
+- Verdicts: **CONFIRMED** (someone got in who should not), **PUBLIC** (open to anyone and the code asks
+  for no login), **PROTECTED** (the other user was refused), **INCONCLUSIVE**, **SKIPPED** (no id given).
+- Reads only by default. `--allow-writes` also replays PUT, PATCH, DELETE and POST: use a disposable
+  test environment.
+
 ### In GitHub Actions
 
 ```yaml
@@ -117,7 +146,7 @@ Leave out the rule name to silence every rule for that route.
 
 ## Limits
 
-- routeguard trusts what a check returns. If `canEdit()` itself has a logic bug, it won't see it.
+- Static analysis trusts what a check returns. If `canEdit()` itself has a logic bug, only `verify` against a running app will show it.
 - Static analysis cannot know an id is unguessable. Capability links need a `routeguard-ignore` comment.
 - Express only for now.
 
