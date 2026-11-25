@@ -61,9 +61,34 @@ export const isMemberNode = node => node?.type === "MemberExpression" || node?.t
 export const isCallNode = node => node?.type === "CallExpression" || node?.type === "OptionalCallExpression"
 const isFunctionNode = node => ["ArrowFunctionExpression", "FunctionExpression", "FunctionDeclaration"].includes(node?.type)
 
+// package.json "imports": { "#*": "./src/*" } lets code import "#modules/x.js"
+let subpathImports = { root: "", map: {} }
+
+function loadSubpathImports(root) {
+	try {
+		const pkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"))
+		subpathImports = { root, map: pkg.imports ?? {} }
+	} catch {
+		subpathImports = { root, map: {} }
+	}
+}
+
+function resolveSubpath(spec) {
+	for (const [key, value] of Object.entries(subpathImports.map)) {
+		const target = typeof value === "string" ? value : (value?.node ?? value?.import ?? value?.default)
+		if (typeof target !== "string") continue
+		const star = key.indexOf("*")
+		if (star === -1 && key === spec) return path.resolve(subpathImports.root, target)
+		if (star !== -1 && spec.startsWith(key.slice(0, star)) && spec.endsWith(key.slice(star + 1)))
+			return path.resolve(subpathImports.root, target.replace("*", spec.slice(star, spec.length - (key.length - star - 1))))
+	}
+	return null
+}
+
 function resolveModule(fromFile, spec) {
-	if (!spec?.startsWith(".")) return null
-	const base = path.resolve(path.dirname(fromFile), spec)
+	if (!spec) return null
+	const base = spec.startsWith("#") ? resolveSubpath(spec) : spec.startsWith(".") ? path.resolve(path.dirname(fromFile), spec) : null
+	if (!base) return null
 	for (const ext of ["", ".js", ".ts", ".mjs", ".cjs", "/index.js", "/index.ts"]) {
 		const candidate = base + ext
 		if (existsSync(candidate) && statSync(candidate).isFile()) return candidate
@@ -265,6 +290,7 @@ export function classify(middleware) {
 }
 
 export function mapRoutes(root) {
+	loadSubpathImports(root)
 	const scans = listSourceFiles(root).map(scanFile)
 	const byFile = new Map(scans.map(s => [s.file, s]))
 	const isRouterFile = file => byFile.get(file)?.routes.length > 0 || byFile.get(file)?.mounts.length > 0
