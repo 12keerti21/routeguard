@@ -316,6 +316,8 @@ function matches(pattern, middleware) {
 	const segments = base.split(".")
 	const last = segments.at(-1)
 	if (pattern.test(last) || (GENERIC.test(last) && segments.length > 1 && pattern.test(segments.at(-2)))) return true
+	// only async wrappers: validate(authValidation.login) is a validator, not a login check
+	if (!/async|wrap|catch|handler/i.test(last)) return false
 	const inner = open === -1 ? "" : middleware.slice(open + 1, middleware.lastIndexOf(")"))
 	return inner.split(",").some(arg => /^[\w.]+$/.test(arg.trim()) && matches(pattern, arg.trim()))
 }
@@ -348,10 +350,11 @@ export function mapRoutes(root) {
 	// which router object an identifier imports: users → "routes/users.js#router", { learnerRouter } → "…#learnerRouter".
 	// "*" when the file's default export is not a plain name, so the mount applies to every router in it
 	function mountKey(scan, ident) {
+		// only files that define routes: { authLimiter } from middlewares/rateLimiter.js is middleware
 		const file = scan.requires.get(ident)
-		if (file && byFile.has(file)) return { file, key: `${file}#${byFile.get(file).defaultExport ?? "*"}` }
+		if (file && isRouterFile(file)) return { file, key: `${file}#${byFile.get(file).defaultExport ?? "*"}` }
 		const named = scan.named.get(ident)
-		if (named && byFile.has(named.file)) return { file: named.file, key: `${named.file}#${named.name}` }
+		if (named && isRouterFile(named.file)) return { file: named.file, key: `${named.file}#${named.name}` }
 		return null
 	}
 

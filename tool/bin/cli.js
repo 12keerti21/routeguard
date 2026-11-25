@@ -11,8 +11,10 @@ import { rateLimit } from "../src/rules/rateLimit.js"
 import { dataExposure } from "../src/rules/dataExposure.js"
 import { misconfig } from "../src/rules/misconfig.js"
 import { inventory } from "../src/rules/inventory.js"
+import { businessFlow } from "../src/rules/businessFlow.js"
+import { consumption } from "../src/rules/consumption.js"
 
-const RULES = [bola, bfla, massAssignment, dataExposure, ssrf, rateLimit]
+const RULES = [bola, bfla, massAssignment, dataExposure, ssrf, rateLimit, businessFlow]
 
 const SEVERITIES = ["LOW", "MEDIUM", "HIGH"]
 
@@ -41,7 +43,8 @@ const findings = [
 	...routes.flatMap(r => RULES.map(rule => rule(r)).filter(f => f && !suppressed(r, f))),
 	// checks that look at the app as a whole, not one route
 	...inventory(routes, root),
-	...misconfig(root)
+	...misconfig(root),
+	...consumption(root)
 ].filter(f => !seen.has(`${f.rule} ${f.route} ${f.where}`) && seen.add(`${f.rule} ${f.route} ${f.where}`))
 
 const exitCode = findings.some(f => SEVERITIES.indexOf(f.severity) >= SEVERITIES.indexOf(failOn)) ? 2 : 0
