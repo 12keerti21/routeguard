@@ -38,6 +38,27 @@ APIGOAT: API1 (both file routes) ✅, API3 `GET /users/:userId` ✅, API5 `POST 
 
 False positives: 0 across both targets.
 
+## Real-world apps (false-positive check)
+
+Four popular open-source Express apps, run 2026-11-25. These are well-built, so a good result is few findings.
+
+| App | Routes mapped | Findings | Verdict |
+|---|---|---|---|
+| [hackathon-starter](https://github.com/sahat/hackathon-starter) | 101 | 0 | ✅ |
+| [node-express-boilerplate](https://github.com/hagopj13/node-express-boilerplate) | 15 | 0 | ✅ `auth('manageUsers')` read as a permission check |
+| [express-rest-boilerplate](https://github.com/danielfsousa/express-rest-boilerplate) | 15 | 2 LOW | ✅ fair: `new User(req.body)` behind `authorize(...)`, partly mitigated by `omit` |
+| [RealWorld example](https://github.com/gothinkster/node-express-realworld-example-app) (TS) | 20 | 0 | ✅ ownership passed to services via `req.auth.user.id` |
+
+The first run, before fixes, mapped only 1 route in one app and raised 8 false positives. Fixes:
+- `router.route(path).get().post()` chains
+- controllers in other files, including `catchAsync(...)` wrappers
+- `lusca.xssProtection` matched "protect": an auth check is now matched on the name, not a substring
+- `passport.session()` and `auth.optional` no longer count as auth
+- `auth('perm')` counts as a permission check
+- `/reset/:token`: a secret in the URL is its own authorisation
+
+Known gap: a router mounted on an inline `Router().use('/api', api)` loses its `/api` prefix.
+
 ## Next
 
 - [ ] Repeat on crAPI (multi-service, more realistic)

@@ -1,8 +1,13 @@
-import { walk } from "../mapper.js"
+import { walk, isMemberNode, isCallNode } from "../mapper.js"
 
 // Mongoose, Sequelize, Prisma and raw query calls that load or change a record
 export const DB_CALL =
 	/^(find|findOne|findById|findByPk|findUnique|findFirst|findByIdAnd(Update|Delete|Remove)|findOneAnd(Update|Delete|Remove|Replace)|update|updateOne|updateMany|delete|deleteOne|deleteMany|destroy|remove|replaceOne|query|execute)$/
+
+// service calls such as userService.getUserById(id) or updateArticle(slug, body)
+export const RECORD_ACCESS = new RegExp(
+	`${DB_CALL.source}|^(get|find|fetch|load|read|update|edit|patch|delete|remove|destroy|archive)[A-Z_]`
+)
 
 export const DB_WRITE =
 	/^(save|create|insert|insertOne|insertMany|upsert|bulkCreate|update|updateOne|updateMany|findByIdAnd(Update|Delete|Remove)|findOneAnd(Update|Delete|Remove|Replace)|delete|deleteOne|deleteMany|destroy|remove|replaceOne)$/
@@ -11,7 +16,7 @@ export const DB_WRITE =
 const IDENTITY_KEYS = new Set(["user", "auth", "session", "userId", "currentUser"])
 
 export const isMember = (node, objectName, propertyName) =>
-	node?.type === "MemberExpression" &&
+	isMemberNode(node) &&
 	node.object.type === "Identifier" &&
 	node.object.name === objectName &&
 	(propertyName === undefined || node.property.name === propertyName)
@@ -28,9 +33,9 @@ export function handlerParams(fn) {
 export function dbCalls(fn, pattern) {
 	const calls = []
 	walk(fn.body, node => {
-		if (node.type !== "CallExpression" || node.callee.type !== "MemberExpression") return
-		const method = node.callee.property.name
-		if (pattern.test(method)) calls.push({ node, method, line: node.loc.start.line })
+		if (!isCallNode(node)) return
+		const method = isMemberNode(node.callee) ? node.callee.property.name : node.callee.name
+		if (method && pattern.test(method)) calls.push({ node, method, line: node.loc.start.line })
 	})
 	return calls
 }
@@ -44,3 +49,6 @@ export function readsIdentity(fn) {
 	})
 	return found
 }
+
+// findings point at the line in the handler, which may live in a controller file
+export const whereOf = (route, line) => `${route.fnFile ?? route.file}:${line}`

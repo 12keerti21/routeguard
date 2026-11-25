@@ -1,5 +1,7 @@
-import { walk } from "../mapper.js"
-import { DB_CALL, dbCalls, handlerParams, isMember, readsIdentity } from "./handler.js"
+import { walk, isMemberNode } from "../mapper.js"
+import { RECORD_ACCESS, dbCalls, handlerParams, isMember, readsIdentity, whereOf } from "./handler.js"
+
+const SECRET_PARAM = /token|code|hash|secret|otp|nonce|signature|key/i
 
 // names that carry a value from req.params: const id = req.params.id, const { id } = req.params
 function paramDerivedNames(fn, req) {
@@ -8,7 +10,7 @@ function paramDerivedNames(fn, req) {
 		if (node.type !== "VariableDeclarator" || !node.init) return
 		const fromParams =
 			isMember(node.init, req, "params") ||
-			(node.init.type === "MemberExpression" && isMember(node.init.object, req, "params"))
+			(isMemberNode(node.init) && isMember(node.init.object, req, "params"))
 		if (!fromParams) return
 		if (node.id.type === "Identifier") names.add(node.id.name)
 		if (node.id.type === "ObjectPattern")
@@ -20,7 +22,7 @@ function paramDerivedNames(fn, req) {
 function usesParam(node, req, derived) {
 	let found = false
 	walk(node, n => {
-		if (n.type === "MemberExpression" && isMember(n.object, req, "params")) found = true
+		if (isMemberNode(n) && isMember(n.object, req, "params")) found = true
 		if (n.type === "Identifier" && derived.has(n.name)) found = true
 	})
 	return found
@@ -32,10 +34,13 @@ export function bola(route) {
 	if (!/[:{]/.test(route.path) || route.role || !route.fn) return null
 	// an unauthenticated read is usually a public catalogue on purpose (books, products)
 	if (!route.auth && route.method === "GET") return null
+	// /reset/:token, /verify/:code: an unguessable secret in the URL is the authorisation
+	const params = route.path.match(/[:{](\w+)/g)?.map(p => p.slice(1)) ?? []
+	if (params.length && params.every(p => SECRET_PARAM.test(p))) return null
 
 	const { req } = handlerParams(route.fn)
 	const derived = paramDerivedNames(route.fn, req)
-	const calls = dbCalls(route.fn, DB_CALL).filter(c => c.node.arguments.some(a => usesParam(a, req, derived)))
+	const calls = dbCalls(route.fn, RECORD_ACCESS).filter(c => c.node.arguments.some(a => usesParam(a, req, derived)))
 	if (calls.length === 0 || readsIdentity(route.fn)) return null
 
 	const write = ["PUT", "PATCH", "DELETE"].includes(route.method)
@@ -48,7 +53,7 @@ export function bola(route) {
 				: "API1:2023 Broken Object Level Authorization",
 		severity: !route.auth || write ? "HIGH" : "MEDIUM",
 		route: `${route.method} ${route.path}`,
-		where: `${route.file}:${calls[0].line}`,
+		where: whereOf(route, calls[0].line),
 		message: `${calls.map(c => c.method).join(", ")} uses an id from the URL, and the handler never checks it against the caller (req.user).`,
 		fix: "If the record has an owner, scope the query to the caller: findOne({ _id: id, owner: req.user._id }). If it is shared, add a role check such as [auth, admin]."
 	}

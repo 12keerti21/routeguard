@@ -3,12 +3,16 @@ import path from "node:path"
 import { parse } from "@babel/parser"
 
 const METHODS = new Set(["get", "post", "put", "patch", "delete", "all", "options", "head"])
-const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", "coverage", "client", "test", "tests"])
+const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", "coverage", "client", "test", "tests", "__tests__"])
 const SOURCE = /\.(c|m)?(j|t)s$/
 
 // role checks first: "adminAuth" is a role check, not just an auth check
 const ROLE = /admin|role|permission|authori[sz]e|owner|rbac|acl|can[A-Z]|scope/i
-const AUTH = /auth|jwt|token|protect|logged.?in|passport|session|guard/i
+// auth('manageUsers'), permit('editor'): a guard called with the right it demands
+const PERMISSION_CALL = /(^|\.)(auth|permit|allow|can|requires?|guard)\((?!\))/i
+const AUTH = /auth|jwt|token|(^|\.)protect(ed)?\b|logged.?in|guard|verify/i
+// present in the chain but enforces nothing
+const NOT_ENFORCED = /optional|initialize|session\(/i
 
 export function listSourceFiles(root) {
 	const files = []
@@ -16,7 +20,7 @@ export function listSourceFiles(root) {
 		if (SKIP_DIRS.has(entry.name)) continue
 		const full = path.join(root, entry.name)
 		if (entry.isDirectory()) files.push(...listSourceFiles(full))
-		else if (SOURCE.test(entry.name) && !entry.name.endsWith(".d.ts")) files.push(full)
+		else if (SOURCE.test(entry.name) && !/\.(d|test|spec)\.(j|t)s$/.test(entry.name)) files.push(full)
 	}
 	return files
 }
@@ -44,8 +48,13 @@ export function walk(node, visit) {
 	}
 }
 
+// a.b and a?.b, a() and a?.()
+export const isMemberNode = node => node?.type === "MemberExpression" || node?.type === "OptionalMemberExpression"
+export const isCallNode = node => node?.type === "CallExpression" || node?.type === "OptionalCallExpression"
+const isFunctionNode = node => ["ArrowFunctionExpression", "FunctionExpression", "FunctionDeclaration"].includes(node?.type)
+
 function resolveModule(fromFile, spec) {
-	if (!spec.startsWith(".")) return null
+	if (!spec?.startsWith(".")) return null
 	const base = path.resolve(path.dirname(fromFile), spec)
 	for (const ext of ["", ".js", ".ts", ".mjs", ".cjs", "/index.js", "/index.ts"]) {
 		const candidate = base + ext
@@ -62,21 +71,23 @@ function stringValue(node) {
 }
 
 function nameOf(node) {
-	switch (node?.type) {
-		case "Identifier":
-			return node.name
-		case "MemberExpression":
-			return `${nameOf(node.object)}.${node.property.name ?? "?"}`
-		case "CallExpression": {
-			const args = node.arguments.map(a => stringValue(a) ?? nameOf(a) ?? "…")
-			return `${nameOf(node.callee)}(${args.join(", ")})`
-		}
-		case "ArrowFunctionExpression":
-		case "FunctionExpression":
-			return "<inline>"
-		default:
-			return null
+	if (isMemberNode(node)) return `${nameOf(node.object)}.${node.property.name ?? "?"}`
+	if (isCallNode(node)) {
+		const args = node.arguments.map(a => stringValue(a) ?? nameOf(a) ?? "…")
+		return `${nameOf(node.callee)}(${args.join(", ")})`
 	}
+	if (node?.type === "Identifier") return node.name
+	if (isFunctionNode(node)) return "<inline>"
+	return null
+}
+
+// catchAsync(async (req, res) => {}) and asyncHandler(getUser) wrap the real handler
+function unwrapHandler(node) {
+	if (isCallNode(node)) {
+		const inner = node.arguments.find(a => isFunctionNode(a) || a.type === "Identifier" || isMemberNode(a))
+		return inner ? unwrapHandler(inner) : node
+	}
+	return node
 }
 
 // plumbing, not access control
@@ -90,42 +101,65 @@ function flattenMiddleware(args) {
 		.filter(name => name && !NOISE.test(name))
 }
 
+// router.route("/x").get(…).post(…): the path sits on .route(), down the chain
+function routeChainPath(object) {
+	let node = object
+	while (isCallNode(node) && isMemberNode(node.callee)) {
+		const prop = node.callee.property.name
+		if (prop === "route") return stringValue(node.arguments[0])
+		if (!METHODS.has(prop)) return null
+		node = node.callee.object
+	}
+	return null
+}
+
+// Router().use(a).use(b) and router.route("/x").get(…): the object at the root of the chain
+function chainRoot(object) {
+	let node = object
+	while (isCallNode(node) && isMemberNode(node.callee) && /^(use|route|get|post|put|patch|delete|all)$/.test(node.callee.property.name))
+		node = node.callee.object
+	return nameOf(node)
+}
+
 function scanFile(file) {
 	const ast = parseFile(file)
-	const result = { file, requires: new Map(), mounts: [], routes: [], uses: [], functions: new Map() }
+	const result = { file, requires: new Map(), named: new Map(), mounts: [], routes: [], uses: [], functions: new Map() }
 	if (!ast) return result
 
 	walk(ast, node => {
-		// named handlers: function getBook(req, res) {} or const getBook = (req, res) => {}
+		// named handlers: function getBook() {}, const getBook = () => {}, const getBook = catchAsync(() => {})
 		if (node.type === "FunctionDeclaration" && node.id) result.functions.set(node.id.name, node)
-		if (
-			node.type === "VariableDeclarator" &&
-			node.id.type === "Identifier" &&
-			["ArrowFunctionExpression", "FunctionExpression"].includes(node.init?.type)
-		) {
-			result.functions.set(node.id.name, node.init)
+		if (node.type === "VariableDeclarator" && node.id.type === "Identifier" && node.init) {
+			const fn = unwrapHandler(node.init)
+			if (isFunctionNode(fn)) result.functions.set(node.id.name, fn)
+		}
+		// exports.getBook = () => {} and module.exports.getBook = () => {}
+		if (node.type === "AssignmentExpression" && isMemberNode(node.left) && /^(module\.)?exports\./.test(nameOf(node.left))) {
+			const fn = unwrapHandler(node.right)
+			if (isFunctionNode(fn)) result.functions.set(node.left.property.name, fn)
 		}
 
-		// const users = require("../routes/users")
-		if (
-			node.type === "VariableDeclarator" &&
-			node.id.type === "Identifier" &&
-			node.init?.type === "CallExpression" &&
-			node.init.callee.name === "require"
-		) {
-			const target = resolveModule(file, stringValue(node.init.arguments[0]) ?? "")
-			if (target) result.requires.set(node.id.name, target)
+		// const users = require("./users") and const { getUser } = require("./users")
+		if (node.type === "VariableDeclarator" && isCallNode(node.init) && node.init.callee.name === "require") {
+			const target = resolveModule(file, stringValue(node.init.arguments[0]))
+			if (target && node.id.type === "Identifier") result.requires.set(node.id.name, target)
+			if (target && node.id.type === "ObjectPattern")
+				for (const p of node.id.properties)
+					if (p.value?.type === "Identifier") result.named.set(p.value.name, { file: target, name: p.key.name })
 		}
-		// import users from "../routes/users.js"
+		// import users from "./users" and import { getUser } from "./users"
 		if (node.type === "ImportDeclaration") {
 			const target = resolveModule(file, node.source.value)
-			const def = node.specifiers.find(s => s.type === "ImportDefaultSpecifier")
-			if (target && def) result.requires.set(def.local.name, target)
+			if (!target) return
+			for (const s of node.specifiers) {
+				if (s.type === "ImportDefaultSpecifier" || s.type === "ImportNamespaceSpecifier") result.requires.set(s.local.name, target)
+				if (s.type === "ImportSpecifier") result.named.set(s.local.name, { file: target, name: s.imported.name ?? s.imported.value })
+			}
 		}
 
-		if (node.type !== "CallExpression" || node.callee.type !== "MemberExpression") return
+		if (!isCallNode(node) || !isMemberNode(node.callee)) return
 		const method = node.callee.property.name
-		const owner = nameOf(node.callee.object)
+		const owner = chainRoot(node.callee.object)
 		const line = node.loc.start.line
 		const [first, ...rest] = node.arguments
 		const routePath = stringValue(first)
@@ -137,24 +171,34 @@ function scanFile(file) {
 				const target = last?.type === "Identifier" ? last.name : null
 				result.mounts.push({ owner, prefix: routePath, target, middleware: flattenMiddleware(rest.slice(0, -1)), line })
 			} else {
-				result.uses.push({ owner, middleware: flattenMiddleware(node.arguments), line })
+				// app.use(auth) is middleware, app.use(usersRouter) mounts at "", sorted out once every file is read
+				const idents = node.arguments.filter(a => a.type === "Identifier").map(a => a.name)
+				result.uses.push({ owner, middleware: flattenMiddleware(node.arguments), idents, line })
 			}
 			return
 		}
 
-		if (METHODS.has(method) && routePath !== null && rest.length > 0) {
-			result.routes.push({
-				owner,
-				method: method.toUpperCase(),
-				path: routePath,
-				middleware: flattenMiddleware(rest.slice(0, -1)),
-				handler: nameOf(rest.at(-1)) ?? "?",
-				handlerNode: rest.at(-1),
-				line
-			})
+		if (!METHODS.has(method)) return
+		if (routePath !== null && rest.length > 0) {
+			result.routes.push(routeEntry(owner, method, routePath, rest, line))
+			return
 		}
+		const chainPath = routeChainPath(node.callee.object)
+		if (chainPath !== null && node.arguments.length > 0) result.routes.push(routeEntry(owner, method, chainPath, node.arguments, line))
 	})
 	return result
+}
+
+function routeEntry(owner, method, routePath, args, line) {
+	return {
+		owner,
+		method: method.toUpperCase(),
+		path: routePath,
+		middleware: flattenMiddleware(args.slice(0, -1)),
+		handler: nameOf(args.at(-1)) ?? "?",
+		handlerNode: args.at(-1),
+		line
+	}
 }
 
 function joinPath(prefix, routePath) {
@@ -163,23 +207,34 @@ function joinPath(prefix, routePath) {
 }
 
 export function classify(middleware) {
-	const role = middleware.some(m => ROLE.test(m))
-	const auth = role || middleware.some(m => AUTH.test(m))
+	const enforced = middleware.filter(m => !NOT_ENFORCED.test(m))
+	const role = enforced.some(m => ROLE.test(m) || PERMISSION_CALL.test(m))
+	const auth = role || enforced.some(m => AUTH.test(m))
 	return { auth, role }
 }
 
 export function mapRoutes(root) {
 	const scans = listSourceFiles(root).map(scanFile)
 	const byFile = new Map(scans.map(s => [s.file, s]))
+	const isRouterFile = file => byFile.get(file)?.routes.length > 0 || byFile.get(file)?.mounts.length > 0
 
 	// who mounts each file, with what prefix and mount-level middleware
 	const mountedBy = new Map()
+	const addMount = (target, mount) => {
+		if (!mountedBy.has(target)) mountedBy.set(target, [])
+		mountedBy.get(target).push(mount)
+	}
 	for (const scan of scans) {
 		for (const mount of scan.mounts) {
 			const target = scan.requires.get(mount.target)
-			if (!target || !byFile.has(target)) continue
-			if (!mountedBy.has(target)) mountedBy.set(target, [])
-			mountedBy.get(target).push({ parent: scan.file, ...mount })
+			if (target && byFile.has(target)) addMount(target, { parent: scan.file, ...mount })
+		}
+		for (const use of scan.uses) {
+			const routers = use.idents.filter(id => isRouterFile(scan.requires.get(id)))
+			for (const id of routers)
+				addMount(scan.requires.get(id), { parent: scan.file, owner: use.owner, prefix: "", middleware: [], line: use.line })
+			// a mounted router is not middleware: authController must not count as an auth check
+			use.middleware = use.middleware.filter(m => !routers.includes(m))
 		}
 	}
 
@@ -201,13 +256,30 @@ export function mapRoutes(root) {
 		return scan.uses.filter(u => u.owner === owner && u.line < line).flatMap(u => u.middleware)
 	}
 
+	// the handler's function node and file, following controllers into the files they come from
+	function resolveHandler(scan, node) {
+		const target = unwrapHandler(node)
+		if (isFunctionNode(target)) return { fn: target, file: scan.file }
+		if (target?.type === "Identifier") {
+			if (scan.functions.has(target.name)) return { fn: scan.functions.get(target.name), file: scan.file }
+			const imported = scan.named.get(target.name)
+			const fn = byFile.get(imported?.file)?.functions.get(imported.name)
+			return fn ? { fn, file: imported.file } : null
+		}
+		if (isMemberNode(target) && target.object.type === "Identifier") {
+			const file = scan.requires.get(target.object.name)
+			const fn = byFile.get(file)?.functions.get(target.property.name)
+			return fn ? { fn, file } : null
+		}
+		return null
+	}
+
 	const routes = []
 	for (const scan of scans) {
 		for (const route of scan.routes) {
+			const handler = resolveHandler(scan, route.handlerNode)
 			for (const ctx of contexts(scan.file)) {
 				const middleware = [...ctx.middleware, ...inheritedUses(scan, route.owner, route.line), ...route.middleware]
-				const node = route.handlerNode
-				const fn = node?.type === "Identifier" ? scan.functions.get(node.name) : node
 				const entry = {
 					method: route.method,
 					path: joinPath(ctx.prefix, route.path),
@@ -218,7 +290,8 @@ export function mapRoutes(root) {
 					line: route.line
 				}
 				// kept off JSON output: rules read the handler's AST
-				Object.defineProperty(entry, "fn", { value: fn?.body ? fn : null })
+				Object.defineProperty(entry, "fn", { value: handler?.fn?.body ? handler.fn : null })
+				Object.defineProperty(entry, "fnFile", { value: path.relative(root, handler?.file ?? scan.file) })
 				routes.push(entry)
 			}
 		}

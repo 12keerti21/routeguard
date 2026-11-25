@@ -1,4 +1,4 @@
-import { DB_WRITE, dbCalls, readsIdentity } from "./handler.js"
+import { DB_WRITE, dbCalls, readsIdentity, whereOf } from "./handler.js"
 
 // path segments that name operator-only functions
 const SENSITIVE = /(^|\/)(admin|internal|manage|system|config|debug|metrics|logs?|keys?|secrets?|backup)(\/|$)/i
@@ -32,7 +32,7 @@ export function bfla(route) {
 		owasp: "API5:2023 Broken Function Level Authorization",
 		severity: "MEDIUM",
 		route: `${route.method} ${route.path}`,
-		where: `${route.file}:${writes[0].line}`,
+		where: whereOf(route, writes[0].line),
 		message: `Any signed-in user can ${writes.map(w => w.method).join(", ")} here, and the new record is not tied to them, so this looks like shared data with no role check.`,
 		fix: "Add a role check such as [auth, admin], or store the caller as owner (owner: req.user._id) if users should own these records."
 	}

@@ -1,5 +1,5 @@
-import { walk } from "../mapper.js"
-import { handlerParams, isMember } from "./handler.js"
+import { walk, isMemberNode, isCallNode } from "../mapper.js"
+import { handlerParams, isMember, whereOf } from "./handler.js"
 
 const WRITE_CALL =
 	/^(create|insert|insertOne|insertMany|upsert|build|bulkCreate|update|updateOne|updateMany|findByIdAndUpdate|findOneAndUpdate|replaceOne|set|assign)$/
@@ -36,13 +36,13 @@ function sensitiveFieldsFromBody(node, req) {
 	if (node?.type !== "ObjectExpression") return []
 	return node.properties
 		.filter(p => p.type === "ObjectProperty" && SENSITIVE_FIELD.test(p.key.name ?? p.key.value ?? ""))
-		.filter(p => p.value.type === "MemberExpression" && isMember(p.value.object, req, "body"))
+		.filter(p => isMemberNode(p.value) && isMember(p.value.object, req, "body"))
 		.map(p => p.key.name ?? p.key.value)
 }
 
 function calleeName(node) {
 	if (node.callee.type === "Identifier") return node.callee.name
-	if (node.callee.type === "MemberExpression") return node.callee.property.name
+	if (isMemberNode(node.callee)) return node.callee.property.name
 	return ""
 }
 
@@ -56,7 +56,7 @@ export function massAssignment(route) {
 	const sinks = []
 	const fields = []
 	walk(route.fn.body, node => {
-		if (node.type === "NewExpression" || (node.type === "CallExpression" && WRITE_CALL.test(calleeName(node)))) {
+		if (node.type === "NewExpression" || (isCallNode(node) && WRITE_CALL.test(calleeName(node)))) {
 			for (const arg of node.arguments) {
 				const found = sensitiveFieldsFromBody(arg, req)
 				if (found.length) fields.push({ names: found, line: node.loc.start.line })
@@ -64,9 +64,9 @@ export function massAssignment(route) {
 		}
 		if (node.type === "NewExpression" && node.arguments.some(a => isWholeBody(a, req, aliases)))
 			sinks.push({ what: `new ${calleeName(node)}(…)`, model: calleeName(node), line: node.loc.start.line })
-		if (node.type === "CallExpression" && WRITE_CALL.test(calleeName(node))) {
+		if (isCallNode(node) && WRITE_CALL.test(calleeName(node))) {
 			if (node.arguments.some(a => isWholeBody(a, req, aliases))) {
-				const object = node.callee.type === "MemberExpression" ? (node.callee.object.name ?? "") : ""
+				const object = isMemberNode(node.callee) ? (node.callee.object.name ?? "") : ""
 				sinks.push({ what: `${object ? object + "." : ""}${calleeName(node)}(…)`, model: object, line: node.loc.start.line })
 			}
 		}
@@ -78,7 +78,7 @@ export function massAssignment(route) {
 			owasp: "API3:2023 Broken Object Property Level Authorization",
 			severity: "HIGH",
 			route: `${route.method} ${route.path}`,
-			where: `${route.file}:${fields[0].line}`,
+			where: whereOf(route, fields[0].line),
 			message: `${names.join(", ")} is taken straight from the request body, so a client chooses its own privileges.`,
 			fix: `Set ${names.join(", ")} on the server (a default, or from req.user), never from req.body.`
 		}
@@ -89,9 +89,10 @@ export function massAssignment(route) {
 	return {
 		rule: "MASS_ASSIGNMENT",
 		owasp: "API3:2023 Broken Object Property Level Authorization (mass assignment)",
-		severity: privileged ? "HIGH" : "MEDIUM",
+		// behind a role check the caller is trusted more, but extra fields still deserve a look
+		severity: route.role ? "LOW" : privileged ? "HIGH" : "MEDIUM",
 		route: `${route.method} ${route.path}`,
-		where: `${route.file}:${sinks[0].line}`,
+		where: whereOf(route, sinks[0].line),
 		message: `${sinks.map(s => s.what).join(", ")} receives the whole request body, so a client can set any field${privileged ? ", including role or admin flags" : ""}.`,
 		fix: "Copy only the fields the client may set: _.pick(req.body, ['name', 'email']) or a validator schema that strips unknown keys."
 	}
