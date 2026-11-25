@@ -1,0 +1,19 @@
+{
+  "name": "routeguard",
+  "version": "0.1.0",
+  "description": "Map Express routes to their auth and role checks, and flag OWASP API authorisation risks",
+  "type": "module",
+  "bin": {
+    "routeguard": "bin/cli.js"
+  },
+  "scripts": {
+    "map": "node bin/cli.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@babel/parser": "^7.29.15"
+  }
+}
