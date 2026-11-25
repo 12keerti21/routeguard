@@ -1,5 +1,5 @@
 {
-  "name": "routeguard",
+  "name": "routeguard-cli",
   "version": "1.0.0",
   "description": "Find broken authorisation in Express APIs: maps routes to their checks and flags the OWASP API Security Top 10",
   "type": "module",
@@ -8,7 +8,8 @@
   },
   "scripts": {
     "map": "node bin/cli.js",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "prepack": "cp ../README.md ../LICENSE ."
   },
   "engines": {
     "node": ">=20"

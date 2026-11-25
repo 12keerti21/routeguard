@@ -44,6 +44,12 @@ vulnerable API, Semgrep found 1 of 9 bugs and Bearer found none ([benchmark](htt
 ## Use it
 
 ```bash
+npx routeguard-cli <path-to-express-app>
+```
+
+Or install it with `npm install -g routeguard-cli` and run `routeguard`. From a clone of this repo:
+
+```bash
 cd tool && npm install
 node bin/cli.js <path-to-express-app>                 # table and findings
 node bin/cli.js <path-to-express-app> --json          # machine-readable

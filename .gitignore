@@ -1,3 +1,5 @@
 node_modules/
 labs/
 .DS_Store
+tool/README.md
+tool/LICENSE
