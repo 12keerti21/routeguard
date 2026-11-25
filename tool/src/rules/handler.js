@@ -128,3 +128,32 @@ export const hasRole = route => route.role || checksRoleInline(route.fn)
 
 // findings point at the line in the handler, which may live in a controller file
 export const whereOf = (route, line) => `${route.fnFile ?? route.file}:${line}`
+
+const INPUT_KEYS = new Set(["body", "query", "params", "headers", "cookies"])
+
+// what in the handler the client controls: req.body.url, req.query, and variables built from them
+export function userInput(fn) {
+	const { req } = handlerParams(fn)
+	const names = new Set()
+	const direct = n => isMember(n, req) && INPUT_KEYS.has(n.property.name)
+	const reads = node => {
+		let found = false
+		walk(node, n => {
+			if (direct(n) || (n.type === "Identifier" && names.has(n.name))) found = true
+		})
+		return found
+	}
+	const inits = new Map()
+	for (let pass = 0; pass < 2; pass++) {
+		walk(fn.body, n => {
+			if (n.type !== "VariableDeclarator" || !n.init || n.id.type !== "Identifier") return
+			inits.set(n.id.name, n.init)
+			if (reads(n.init)) names.add(n.id.name)
+		})
+	}
+	return { reads, inits }
+}
+
+export const calleeName = call => (isMemberNode(call.callee) ? call.callee.property.name : call.callee.name) ?? ""
+export const calleeObject = call =>
+	isMemberNode(call.callee) ? (call.callee.object.name ?? call.callee.object.property?.name ?? "") : ""

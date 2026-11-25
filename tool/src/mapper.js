@@ -20,7 +20,8 @@ const AUTH =
 // auth.required, passport.check: the last segment says little, so the whole name decides
 const GENERIC = /^(required|check|ensure|verify|middleware|guard|protect|handler|validate)$/i
 // present in the chain but enforces nothing
-const NOT_ENFORCED = /optional|initialize|session\(/i
+// authLimiter is rate limiting, not authentication
+const NOT_ENFORCED = /optional|initialize|session\(|limit|throttle/i
 
 export function listSourceFiles(root) {
 	const files = []
@@ -59,6 +60,7 @@ export function walk(node, visit) {
 // a.b and a?.b, a() and a?.()
 export const isMemberNode = node => node?.type === "MemberExpression" || node?.type === "OptionalMemberExpression"
 export const isCallNode = node => node?.type === "CallExpression" || node?.type === "OptionalCallExpression"
+const isMember = (node, objectName) => isMemberNode(node) && node.object.type === "Identifier" && node.object.name === objectName
 const isFunctionNode = node => ["ArrowFunctionExpression", "FunctionExpression", "FunctionDeclaration"].includes(node?.type)
 
 // package.json "imports": { "#*": "./src/*" } lets code import "#modules/x.js"
@@ -176,6 +178,12 @@ function scanFile(file) {
 		if (node.type === "VariableDeclarator" && node.id.type === "Identifier" && isCallNode(node.init))
 			chainOwners.set(chainRootNode(node.init), node.id.name)
 	})
+	// const routes = [{ path: "/auth", route: authRoute }, …]: for routes.forEach(r => router.use(r.path, r.route))
+	const arrays = new Map()
+	walk(ast, node => {
+		if (node.type === "VariableDeclarator" && node.id.type === "Identifier" && node.init?.type === "ArrayExpression")
+			arrays.set(node.id.name, node.init.elements)
+	})
 	const chainRoot = object => {
 		const root = chainRootNode(object)
 		return chainOwners.get(root) ?? nameOf(root)
@@ -214,6 +222,26 @@ function scanFile(file) {
 
 		if (!isCallNode(node) || !isMemberNode(node.callee)) return
 		const method = node.callee.property.name
+
+		if (method === "forEach" && node.callee.object.type === "Identifier" && arrays.has(node.callee.object.name)) {
+			const callback = node.arguments[0]
+			const item = callback?.params?.[0]?.name
+			if (!item) return
+			walk(callback.body, inner => {
+				if (!isCallNode(inner) || !isMemberNode(inner.callee) || inner.callee.property.name !== "use") return
+				const [pathArg, routerArg] = inner.arguments
+				if (!isMember(pathArg, item) || !isMember(routerArg, item)) return
+				for (const element of arrays.get(node.callee.object.name)) {
+					if (element?.type !== "ObjectExpression") continue
+					const field = key => element.properties.find(p => p.key?.name === key)?.value
+					const prefix = stringValue(field(pathArg.property.name))
+					const target = field(routerArg.property.name)
+					if (prefix !== null && target?.type === "Identifier")
+						result.mounts.push({ owner: chainRoot(inner.callee.object), prefix, target: target.name, middleware: [], allMiddleware: [], line: inner.loc.start.line })
+				}
+			})
+			return
+		}
 		const owner = chainRoot(node.callee.object)
 		const line = node.loc.start.line
 		const [first, ...rest] = node.arguments
@@ -369,16 +397,24 @@ export function mapRoutes(root) {
 		return scan.uses.filter(u => u.owner === owner && u.line < line).flatMap(u => u.middleware)
 	}
 
+	const covers = (prefix, fullPath) => {
+		const pattern = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\\:\w+|:\w+/g, "[^/]+")}(/|$)`, "i")
+		return pattern.test(fullPath)
+	}
+
 	// app.use("/rest/basket", isAuthorized()) guards /rest/basket and everything under it
 	function pathScopedUses(scan, route) {
-		const covers = prefix => {
-			const pattern = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\\:\w+|:\w+/g, "[^/]+")}(/|$)`, "i")
-			return pattern.test(route.path)
-		}
 		return scan.pathUses
-			.filter(u => u.owner === route.owner && u.line <= route.line && covers(u.prefix))
+			.filter(u => u.owner === route.owner && u.line <= route.line && covers(u.prefix, route.path))
 			.flatMap(u => u.middleware)
 	}
+
+	// app.use("/v1/auth", authLimiter) in app.js covers routes defined in routes/auth.route.js
+	const outerPathUses = scans.flatMap(scan =>
+		scan.pathUses.flatMap(u => contexts(scan.file).map(ctx => ({ file: scan.file, prefix: joinPath(ctx.prefix, u.prefix), middleware: u.middleware })))
+	)
+	const crossFileUses = (file, fullPath) =>
+		outerPathUses.filter(u => u.file !== file && covers(u.prefix, fullPath)).flatMap(u => u.middleware)
 
 	// the handler's function node and file, following controllers into the files they come from
 	function resolveHandler(scan, node) {
@@ -407,6 +443,12 @@ export function mapRoutes(root) {
 		return null
 	}
 
+	// the file an identifier in `file` was imported from: User → models/user.js
+	function importedFile(file, name) {
+		const scan = byFile.get(file)
+		return scan?.requires.get(name) ?? scan?.named.get(name)?.file ?? null
+	}
+
 	// the function a call in `file` names: getCourseShares(...), courseService.getCourse(...)
 	function resolveCallee(file, callee) {
 		const scan = byFile.get(file)
@@ -428,9 +470,11 @@ export function mapRoutes(root) {
 					...pathScopedUses(scan, route),
 					...route.middleware
 				]
+				const fullPath = joinPath(joinPath(ctx.prefix, local.prefix), route.path)
+				middleware.unshift(...crossFileUses(scan.file, fullPath))
 				const entry = {
 					method: route.method,
-					path: joinPath(joinPath(ctx.prefix, local.prefix), route.path),
+					path: fullPath,
 					middleware,
 					handler: route.handler,
 					...classify(middleware),
@@ -443,6 +487,7 @@ export function mapRoutes(root) {
 				Object.defineProperty(entry, "fnPath", { value: handler?.file ?? scan.file })
 				// lets rules follow a call from the handler into the function it names
 				Object.defineProperty(entry, "resolve", { value: resolveCallee })
+				Object.defineProperty(entry, "importedFile", { value: importedFile })
 				Object.defineProperty(entry, "root", { value: root })
 				Object.defineProperty(entry, "ignored", { value: ignoredRules(scan.file, route.line) })
 				routes.push(entry)

@@ -14,7 +14,8 @@ Exit code 2 when there are findings.
 ## Status
 
 - Route mapper: Express `app`/`router` routes, nested mounts, `router.use` middleware
-- Rules: BOLA (API1), BFLA (API5), mass assignment (API3)
+- Rules: BOLA (API1), BFLA (API5), mass assignment and excessive data exposure (API3),
+  missing rate limits on login, OTP and reset flows (API4/API2), SSRF (API7)
 - BOLA follows the URL id from the handler into the services it calls (up to 4 calls deep) and
   needs the caller to limit it on the way: in the query, in a guard that compares the caller with
   the record, or in a check call such as `canUpdate(user, course)`

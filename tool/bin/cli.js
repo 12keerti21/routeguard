@@ -4,8 +4,11 @@ import { mapRoutes } from "../src/mapper.js"
 import { bola } from "../src/rules/bola.js"
 import { bfla } from "../src/rules/bfla.js"
 import { massAssignment } from "../src/rules/massAssignment.js"
+import { ssrf } from "../src/rules/ssrf.js"
+import { rateLimit } from "../src/rules/rateLimit.js"
+import { dataExposure } from "../src/rules/dataExposure.js"
 
-const RULES = [bola, bfla, massAssignment]
+const RULES = [bola, bfla, massAssignment, dataExposure, ssrf, rateLimit]
 
 const args = process.argv.slice(2)
 const json = args.includes("--json")
@@ -18,7 +21,11 @@ if (!target) {
 
 const routes = mapRoutes(path.resolve(target))
 const suppressed = (route, finding) => route.ignored === "all" || route.ignored?.has(finding.rule)
-const findings = routes.flatMap(r => RULES.map(rule => rule(r)).filter(f => f && !suppressed(r, f)))
+// a router mounted twice reports the same code twice
+const seen = new Set()
+const findings = routes
+	.flatMap(r => RULES.map(rule => rule(r)).filter(f => f && !suppressed(r, f)))
+	.filter(f => !seen.has(`${f.rule} ${f.route} ${f.where}`) && seen.add(`${f.rule} ${f.route} ${f.where}`))
 
 if (json) {
 	console.log(JSON.stringify({ routes, findings }, null, 2))
