@@ -1,9 +1,9 @@
 import { walk, isCallNode } from "../mapper.js"
-import { calleeName } from "./handler.js"
+import { calleeName, hasRole } from "./handler.js"
 
 // flows a bot profits from automating: buying out stock, farming referrals, mass reviews
 // matched against whole path segments: "books" is a catalogue and "tokenTransfer" a session hand-off
-const MONEY = /^(checkout|orders?|purchases?|buy|redeem|coupons?|vouchers?|promos?|promo-?codes?|referrals?|refer|transfers?|withdraw\w*|payouts?|gift-?cards?|credits?|rewards?)$/i
+const MONEY = /^(checkout|orders?|purchases?|buy|redeem|coupons?|vouchers?|promos?|promo-?codes?|referrals?|refer|withdraw\w*|payouts?|gift-?cards?|credits?|rewards?)$/i
 const ABUSE = /^(book|bookings?|reserv\w*|seats?|tickets?|votes?|likes?|reviews?|comments?|invites?|invitations?)$/i
 // anti-automation: a limiter, a captcha, a proof of work, a queue
 // robots(…) serves robots.txt; bot only counts as botProtection, botGuard, botDetect
@@ -29,8 +29,10 @@ function guardedInCode(route, fn, file, depth = 0, seen = new Set()) {
 export function businessFlow(route) {
 	if (!["POST", "PUT", "PATCH"].includes(route.method)) return null
 	const segments = route.path.split("/").filter(s => s && !/^[:{]/.test(s))
-	const segment = segments.find(s => MONEY.test(s)) ?? segments.find(s => ABUSE.test(s))
-	if (!segment) return null
+	// a transfer is money only next to money words: /wallet/transfer, not /labels/transfer
+	const moneyTransfer = segments.some(s => /^transfers?$/i.test(s)) && segments.some(s => /wallet|fund|balance|payment|account|money|credit/i.test(s))
+	const segment = (moneyTransfer && "transfer") || segments.find(s => MONEY.test(s)) || segments.find(s => ABUSE.test(s))
+	if (!segment || hasRole(route)) return null
 	// /invites/:token/accept: the token gates it, one use per token
 	if (/[:{]\w*(token|code|secret|hash)/i.test(route.path)) return null
 	if (route.middleware.some(m => GUARD.test(m)) || guardedInCode(route, route.fn, route.fnPath)) return null

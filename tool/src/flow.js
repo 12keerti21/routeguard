@@ -144,6 +144,8 @@ export function traceScope(ctx) {
 	walk(fn.body, n => {
 		// if (course.ownerOrgId !== user.orgId): the caller compared with what the id reached.
 		// if (!user) alone checks login, not ownership.
+		// history[noteId] where history is the caller's own: the id only picks among the caller's records
+		if (isMemberNode(n) && n.computed && readsCaller(n.object) && readsId(n.property)) scope(n, "id looked up in the caller's own data")
 		if ((n.type === "IfStatement" || n.type === "ConditionalExpression") && readsCaller(n.test) && readsId(n.test))
 			scope(n, "guard comparing the caller with the record")
 		if (!isCallNode(n)) return
@@ -153,6 +155,8 @@ export function traceScope(ctx) {
 		const takesCaller = valueArgs(n).some(readsCaller)
 		if (takesCaller && CHECK_FN.test(name)) scope(n, `${name}(… caller …)`)
 		if (takesCaller && CREATE.test(name)) ownedCreate = true
+		// getHistory(req.user.id, (err, history) => …): history is the caller's
+		if (takesCaller) n.arguments.filter(isFunction).forEach(cb => cb.params.flatMap(boundNames).forEach(p => callers.add(p)))
 		if (!takesId || scoped) return
 
 		const line = n.loc.start.line

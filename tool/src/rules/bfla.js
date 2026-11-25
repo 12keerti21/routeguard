@@ -4,10 +4,12 @@ import { DB_CALL, DB_WRITE, checksBodyCredential, dbCalls, hasRole, readsIdentit
 const PAGE_ONLY = /^(sendFile|render|redirect|download|readFile|createReadStream)$/
 
 // path segments that name operator-only functions
-const SENSITIVE = /(^|\/)(admin|internal|manage|system|config|debug|metrics|logs?|keys?|secrets?|backup)(\/|$)/i
+const SENSITIVE = /(^|\/)(admin|internal|manage|system|config|debug|metrics|logs?|secrets?|backup)(\/|$)/i
 
 // an API key or basic auth is usually issued to operators only; a user login is not
 function sensitiveSeverity(route) {
+	// the handler looks at the caller itself (empty answer for anonymous users), so the gap is narrower
+	if (route.fn && readsIdentity(route.fn)) return "LOW"
 	if (route.middleware.some(m => /api.?(key|auth)|basic/i.test(m))) return "LOW"
 	if (route.fn && dbCalls(route.fn, DB_CALL).length === 0 && dbCalls(route.fn, PAGE_ONLY).length > 0) return "LOW"
 	return "HIGH"

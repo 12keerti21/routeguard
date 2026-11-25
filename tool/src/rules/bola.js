@@ -3,7 +3,7 @@ import { walk, isMemberNode } from "../mapper.js"
 import { traceRoute } from "../flow.js"
 import { RECORD_ACCESS, checksBodyCredential, dbCalls, handlerParams, hasRole, isMember, whereOf } from "./handler.js"
 
-const SECRET_PARAM = /token|code|hash|secret|otp|nonce|signature|key/i
+const SECRET_PARAM = /token|code|hash|secret|otp|nonce|signature|key|session/i
 
 // names that carry a value from req.params: const id = req.params.id, const { id } = req.params
 function paramDerivedNames(fn, req) {

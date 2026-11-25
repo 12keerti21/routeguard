@@ -2,13 +2,17 @@ import path from "node:path"
 import { listSpecFiles } from "../spec.js"
 
 // leftover versions and environments: /v1 next to /v2, /dev, /beta, /old (debug and internal are BFLA's)
-const NON_PROD = /^(dev|develop|test|testing|staging|stage|old|legacy|deprecated|beta|alpha|tmp|temp|sandbox)$/i
+// environment names only, near the top of the path: /dev/csrf, /api/test/x. "/stage", "/temp" and
+// "/flush/old" are usually feature names
+const NON_PROD = /^(dev|develop|development|test|testing|staging|sandbox|deprecated)$/i
 const VERSION = /^v\d+$/i
 
 const strength = route => (route.role ? 2 : route.auth ? 1 : 0)
 const STRENGTH = ["no auth", "auth", "auth and a role"]
 // /api/v1/users/:id and /api/v2/users/:userId are the same endpoint
-const shape = route => `${route.method} ${route.path.split("/").filter(s => !VERSION.test(s)).map(s => (/^[:{]/.test(s) ? ":p" : s.toLowerCase())).join("/")}`
+// one app's /x and another app's /x in the same monorepo are not copies of each other
+const shape = route => `${route.rootFile ?? ""} ${shapePath(route)}`
+const shapePath = route => `${route.method} ${route.path.split("/").filter(s => !VERSION.test(s)).map(s => (/^[:{]/.test(s) ? ":p" : s.toLowerCase())).join("/")}`
 
 // API9: endpoints nobody tracks, which keep old or weaker rules
 export function inventory(routes, root) {
@@ -17,7 +21,8 @@ export function inventory(routes, root) {
 	// the same endpoint registered more than once, one copy guarded less than another
 	const byShape = new Map()
 	// only routes whose full path is known: a router mounted inside a function (mountMcp(app)) has no prefix here
-	for (const r of routes.filter(r => r.anchored)) {
+	// catch-alls (/{*any}, *) exist in most apps and are not copies of one endpoint
+	for (const r of routes.filter(r => r.anchored && !/[*]/.test(r.path))) {
 		if (!byShape.has(shape(r))) byShape.set(shape(r), [])
 		byShape.get(shape(r)).push(r)
 	}
@@ -40,7 +45,7 @@ export function inventory(routes, root) {
 
 	// /dev/..., /beta/..., /old/...
 	for (const r of routes) {
-		const segment = r.path.split("/").find(s => NON_PROD.test(s))
+		const segment = r.path.split("/").filter(s => s && !/^(api|v\d+)$/i.test(s)).slice(0, 2).find(s => NON_PROD.test(s))
 		if (!segment) continue
 		findings.push({
 			rule: "NON_PROD_ROUTE",

@@ -2,8 +2,15 @@ import { walk, isCallNode } from "../mapper.js"
 import { calleeName } from "./handler.js"
 
 // endpoints worth brute-forcing, judged on the last path segment: /auth/login, /forgot-password, /otp
-const GUESSABLE = /login|log-in|signin|sign-in|otp|2fa|mfa|(^|[-_])verify([-_]|$)|forgot|reset|password|register|signup|sign-up|^auth$/i
-const CODE_CHECK = /otp|2fa|mfa|(^|[-_])verify([-_]|$)|code/i
+const GUESSABLE = new Set(["login", "signin", "otp", "2fa", "mfa", "totp", "verify", "forgot", "reset", "password", "register", "signup", "auth"])
+// "flushProjectToTpds" has "otp" in it, "loginLimit" has "login": split into words first
+const words = segment =>
+	segment
+		.replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+		.split(/[\s_.-]+/)
+		.map(w => w.toLowerCase())
+		.flatMap((w, i, all) => (all[i + 1] && ["log", "sign"].includes(w) && ["in", "up"].includes(all[i + 1]) ? [w + all[i + 1]] : [w]))
+const CODE_CHECK = { test: segment => words(segment).some(w => ["otp", "2fa", "mfa", "totp", "verify", "code"].includes(w)) }
 const LIMITER = /limit|throttle|slow.?down|brute|pace|lockout/i
 // throttling done in code: signInPace.check(...), recordFailedAttempt(user)
 const LIMITER_CALL = /rate.?limit|throttle|pace|lockout|attempts?|brute|penalt|cooldown/i
@@ -28,7 +35,7 @@ function throttlesInCode(route, fn, file, depth = 0, seen = new Set()) {
 export function rateLimit(route) {
 	if (route.method !== "POST") return null
 	const segment = route.path.split("/").filter(s => s && !/^[:{]/.test(s)).at(-1) ?? ""
-	if (!GUESSABLE.test(segment)) return null
+	if (!words(segment).some(w => GUESSABLE.has(w))) return null
 	// a signed-in caller setting a password is not guessing one; a code check behind a session still is
 	if (route.auth && !CODE_CHECK.test(segment)) return null
 	if (route.middleware.some(m => LIMITER.test(m))) return null

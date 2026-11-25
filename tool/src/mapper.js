@@ -2,15 +2,24 @@ import { readdirSync, readFileSync, existsSync, statSync } from "node:fs"
 import path from "node:path"
 import { parse } from "@babel/parser"
 
+// objects that register routes: router, app, api, apiRouter, server (not cache.get or map.get)
+const ROUTER_OWNER = /router|^app$|app\b|^api|route|server/i
 const METHODS = new Set(["get", "post", "put", "patch", "delete", "all", "options", "head"])
 // static and frontend code holds no Express routes; juice-shop keeps challenge snippets in data/static
-const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", "coverage", "client", "frontend", "public", "static", "test", "tests", "__tests__"])
+const SKIP_DIRS = new Set([
+	"node_modules", "dist", "build", "coverage", "client", "frontend", "public", "static",
+	"test", "tests", "__tests__", "e2e", "cypress", "playwright", "mocks", "__mocks__", "stubs", "examples", "example", "storybook"
+])
+// bundles and vendored releases (.yarn/releases/yarn-4.cjs) are not the app's code
+const MAX_SOURCE_BYTES = 512 * 1024
 const SOURCE = /\.(c|m)?(j|t)s$/
 
 // role checks first: "adminAuth" is a role check, not just an auth check
 // isAuthorized() only checks login; authorize(ADMIN) with an argument names a role
 // isAccounting(), isStaff(): an "is" check that is not about being signed in
-const ROLE = /admin|role|permission|owner|rbac|acl|can[A-Z]|scope|^is_?(?!auth|logged|signed|valid|verified)[a-z]+$/i
+// requireGroupMemberManagement, ensureProjectAccess, checkOwner: a named check on a right, not on login
+const ROLE =
+	/admin|role|permission|owner|rbac|acl|can[A-Z]|scope|^is_?(?!auth|logged|signed|valid|verified)[a-z]+$|^(require|ensure|check|assert|verify)_?\w*(manag|access|member|owner|permission|role|staff|privilege|collaborat)/i
 // auth('manageUsers'), permit('editor'): a guard called with the right it demands
 const PERMISSION_CALL = /(^|\.)(auth|authori[sz]e|permit|allow|can|requires?|guard)\((?!\))/i
 // matched against a function's own name: isAuthenticated, checkAuth, auth.jwt, verifyToken, apiAuth
@@ -26,10 +35,10 @@ const NOT_ENFORCED = /optional|initialize|session\(|limit|throttle/i
 export function listSourceFiles(root) {
 	const files = []
 	for (const entry of readdirSync(root, { withFileTypes: true })) {
-		if (SKIP_DIRS.has(entry.name)) continue
+		if (SKIP_DIRS.has(entry.name) || entry.name.startsWith(".")) continue
 		const full = path.join(root, entry.name)
 		if (entry.isDirectory()) files.push(...listSourceFiles(full))
-		else if (SOURCE.test(entry.name) && !/\.(d|test|spec)\.(j|t)s$/.test(entry.name)) files.push(full)
+		else if (SOURCE.test(entry.name) && !/\.(d|test|spec|min)\.(j|t)s$/.test(entry.name) && statSync(full).size <= MAX_SOURCE_BYTES) files.push(full)
 	}
 	return files
 }
@@ -61,12 +70,47 @@ export function walk(node, visit) {
 export const isMemberNode = node => node?.type === "MemberExpression" || node?.type === "OptionalMemberExpression"
 export const isCallNode = node => node?.type === "CallExpression" || node?.type === "OptionalCallExpression"
 const isMember = (node, objectName) => isMemberNode(node) && node.object.type === "Identifier" && node.object.name === objectName
-const isFunctionNode = node => ["ArrowFunctionExpression", "FunctionExpression", "FunctionDeclaration"].includes(node?.type)
+const isFunctionNode = node => ["ArrowFunctionExpression", "FunctionExpression", "FunctionDeclaration", "ObjectMethod", "ClassMethod"].includes(node?.type)
 
 // package.json "imports": { "#*": "./src/*" } lets code import "#modules/x.js"
 let subpathImports = { root: "", map: {} }
 
+// monorepo packages by name: "@verdaccio/middleware" → packages/middleware
+let workspacePackages = new Map()
+
+function findPackages(dir, depth = 0, out = new Map()) {
+	if (depth > 4) return out
+	let entries
+	try {
+		entries = readdirSync(dir, { withFileTypes: true })
+	} catch {
+		return out
+	}
+	for (const entry of entries) {
+		if (entry.isDirectory() && !SKIP_DIRS.has(entry.name) && !entry.name.startsWith(".")) findPackages(path.join(dir, entry.name), depth + 1, out)
+		if (entry.name === "package.json" && depth > 0) {
+			try {
+				const pkg = JSON.parse(readFileSync(path.join(dir, entry.name), "utf8"))
+				if (pkg.name) out.set(pkg.name, dir)
+			} catch {}
+		}
+	}
+	return out
+}
+
+function resolvePackage(spec) {
+	const name = [...workspacePackages.keys()].filter(n => spec === n || spec.startsWith(`${n}/`)).sort((a, b) => b.length - a.length)[0]
+	if (!name) return null
+	const dir = workspacePackages.get(name)
+	const sub = spec.slice(name.length + 1)
+	if (sub) return path.join(dir, sub)
+	for (const entry of ["src/index.ts", "src/index.js", "index.ts", "index.js", "lib/index.js"])
+		if (existsSync(path.join(dir, entry))) return path.join(dir, entry)
+	return null
+}
+
 function loadSubpathImports(root) {
+	workspacePackages = findPackages(root)
 	try {
 		const pkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"))
 		subpathImports = { root, map: pkg.imports ?? {} }
@@ -89,7 +133,11 @@ function resolveSubpath(spec) {
 
 function resolveModule(fromFile, spec) {
 	if (!spec) return null
-	const base = spec.startsWith("#") ? resolveSubpath(spec) : spec.startsWith(".") ? path.resolve(path.dirname(fromFile), spec) : null
+	const base = spec.startsWith("#")
+		? resolveSubpath(spec)
+		: spec.startsWith(".")
+			? path.resolve(path.dirname(fromFile), spec)
+			: resolvePackage(spec)
 	if (!base) return null
 	for (const ext of ["", ".js", ".ts", ".mjs", ".cjs", "/index.js", "/index.ts"]) {
 		const candidate = base + ext
@@ -168,6 +216,10 @@ function scanFile(file) {
 		routes: [],
 		uses: [],
 		pathUses: [],
+		// const PREFIX = "/api", const ENDPOINTS = { list: "/stage" }, enum ENDPOINTS { list = "/stage" }
+		constants: new Map(),
+		reexportAll: [],
+		reexportNamed: new Map(),
 		// module.exports = router / export default router: which router a plain import gets
 		defaultExport: null,
 		createsApp: false,
@@ -199,12 +251,41 @@ function scanFile(file) {
 			const fn = unwrapHandler(node.init)
 			if (isFunctionNode(fn)) result.functions.set(node.id.name, fn)
 		}
+		if (node.type === "VariableDeclarator" && node.id.type === "Identifier" && node.init) {
+			let init = node.init
+			while (["TSAsExpression", "TSSatisfiesExpression"].includes(init.type) || (isCallNode(init) && nameOf(init.callee) === "Object.freeze")) init = init.expression ?? init.arguments[0]
+			if (["StringLiteral", "TemplateLiteral", "ObjectExpression", "BinaryExpression"].includes(init?.type)) result.constants.set(node.id.name, init)
+		}
+		if (node.type === "TSEnumDeclaration")
+			result.constants.set(node.id.name, { type: "Enum", members: new Map(node.members.map(m => [m.id.name ?? m.id.value, m.initializer])) })
+		if (node.type === "ExportAllDeclaration") {
+			const target = resolveModule(file, node.source.value)
+			if (target) result.reexportAll.push(target)
+		}
+		if (node.type === "ExportNamedDeclaration" && node.source) {
+			const target = resolveModule(file, node.source.value)
+			if (target) for (const sp of node.specifiers) if (sp.local) result.reexportNamed.set(sp.exported.name ?? sp.exported.value, { file: target, name: sp.local.name })
+		}
+
 		if (node.type === "AssignmentExpression" && nameOf(node.left) === "module.exports" && node.right.type === "Identifier")
 			result.defaultExport = node.right.name
 		if (node.type === "ExportDefaultDeclaration")
 			result.defaultExport = node.declaration.type === "Identifier" ? node.declaration.name : isCallNode(node.declaration) ? chainRoot(node.declaration) : null
 		if (isCallNode(node) && (node.callee.name === "express" || (isMemberNode(node.callee) && node.callee.property.name === "listen")))
 			result.createsApp = true
+
+		// const Controller = { getMessages(req, res) {…}, list: async (req, res) => {…} }; export default Controller
+		if (node.type === "VariableDeclarator" && node.id.type === "Identifier" && node.init?.type === "ObjectExpression") {
+			for (const prop of node.init.properties) {
+				const key = prop.key?.name ?? prop.key?.value
+				if (!key) continue
+				if (prop.type === "ObjectMethod") result.functions.set(key, prop)
+				else if (prop.type === "ObjectProperty") {
+					const fn = unwrapHandler(prop.value)
+					if (isFunctionNode(fn) && !result.functions.has(key)) result.functions.set(key, fn)
+				}
+			}
+		}
 
 		// exports.getBook = () => {} and module.exports.getBook = () => {}
 		if (node.type === "AssignmentExpression" && isMemberNode(node.left) && /^(module\.)?exports\./.test(nameOf(node.left))) {
@@ -257,14 +338,21 @@ function scanFile(file) {
 		const [first, ...rest] = node.arguments
 		const routePath = stringValue(first)
 
+		// router.get(ENDPOINTS.list, …), app.use(`${PREFIX}/users`, users): resolved once every file is read
+		const pathExpression =
+			routePath === null && ["Identifier", "MemberExpression", "TemplateLiteral", "BinaryExpression"].includes(first?.type) && ROUTER_OWNER.test(owner ?? "")
+				? first
+				: null
+
 		if (method === "use") {
-			if (routePath !== null) {
+			if (routePath !== null || (pathExpression && rest.length > 0 && !isFunctionNode(rest.at(-1)) && !isCallNode(rest.at(-1)) && rest.at(-1)?.type === "Identifier" && first.type !== "Identifier")) {
 				// app.use("/api/users", auth, users): the last identifier is the mounted router
 				const last = rest.at(-1)
 				const target = last?.type === "Identifier" ? last.name : null
 				result.mounts.push({
 					owner,
 					prefix: routePath,
+					prefixNode: routePath === null ? first : null,
 					target,
 					middleware: flattenMiddleware(rest.slice(0, -1)),
 					// app.use("/rest/basket", isAuthorized()): no router, so every argument is middleware
@@ -282,6 +370,10 @@ function scanFile(file) {
 		if (!METHODS.has(method)) return
 		if (routePath !== null && rest.length > 0) {
 			result.routes.push(routeEntry(owner, method, routePath, rest, line))
+			return
+		}
+		if (pathExpression && rest.length > 0 && rest.some(a => isFunctionNode(a) || a.type === "Identifier" || isMemberNode(a) || isCallNode(a))) {
+			result.routes.push({ ...routeEntry(owner, method, null, rest, line), pathNode: first })
 			return
 		}
 		const chainPath = routeChainPath(node.callee.object)
@@ -347,6 +439,95 @@ export function mapRoutes(root) {
 	const byFile = new Map(scans.map(s => [s.file, s]))
 	const isRouterFile = file => byFile.get(file)?.routes.length > 0 || byFile.get(file)?.mounts.length > 0
 
+	// a constant exported from `file` under `name`, following export * and export { x } from
+	function exportedConstant(file, name, depth = 0) {
+		const scan = byFile.get(file)
+		if (!scan || depth > 4) return null
+		if (scan.constants.has(name)) return { file, node: scan.constants.get(name) }
+		const named = scan.reexportNamed.get(name)
+		if (named) return exportedConstant(named.file, named.name, depth + 1)
+		for (const next of scan.reexportAll) {
+			const found = exportedConstant(next, name, depth + 1)
+			if (found) return found
+		}
+		return null
+	}
+
+	function lookup(file, name) {
+		const scan = byFile.get(file)
+		if (!scan) return null
+		if (scan.constants.has(name)) return { file, node: scan.constants.get(name) }
+		const named = scan.named.get(name)
+		if (named) return exportedConstant(named.file, named.name)
+		const module = scan.requires.get(name)
+		if (module) return { file: module, module: true }
+		return null
+	}
+
+	// ENDPOINTS, Constants.API: an object (or enum, or module) whose properties can be read
+	function evaluateObject(file, node, depth = 0) {
+		if (depth > 6 || !node) return null
+		if (node.type === "Identifier") {
+			const found = lookup(file, node.name)
+			if (!found) return null
+			if (found.module) return { file: found.file, module: true }
+			return evaluateObject(found.file, found.node, depth + 1)
+		}
+		if (node.type === "Enum") return { file, get: key => node.members.get(key) }
+		if (node.type === "ObjectExpression")
+			return { file, get: key => node.properties.find(p => (p.key?.name ?? p.key?.value) === key)?.value }
+		if (isMemberNode(node)) {
+			const owner = evaluateObject(file, node.object, depth + 1)
+			const key = node.computed ? stringValue(node.property) : node.property.name
+			if (!owner || key == null) return null
+			if (owner.module) {
+				const found = exportedConstant(owner.file, key)
+				return found ? evaluateObject(found.file, found.node, depth + 1) : null
+			}
+			return evaluateObject(owner.file, owner.get(key), depth + 1)
+		}
+		return null
+	}
+
+	function evaluateString(file, node, depth = 0) {
+		if (!node || depth > 6) return null
+		const literal = stringValue(node)
+		if (literal !== null) return literal
+		if (node.type === "TemplateLiteral") {
+			const parts = node.expressions.map(e => evaluateString(file, e, depth + 1))
+			if (parts.some(p => p === null)) return null
+			return node.quasis.map((q, i) => q.value.cooked + (parts[i] ?? "")).join("")
+		}
+		if (node.type === "BinaryExpression" && node.operator === "+") {
+			const left = evaluateString(file, node.left, depth + 1)
+			const right = evaluateString(file, node.right, depth + 1)
+			return left === null || right === null ? null : left + right
+		}
+		if (node.type === "Identifier") {
+			const found = lookup(file, node.name)
+			return found && !found.module ? evaluateString(found.file, found.node, depth + 1) : null
+		}
+		if (isMemberNode(node)) {
+			const owner = evaluateObject(file, node.object)
+			const key = node.computed ? stringValue(node.property) : node.property.name
+			if (!owner || key == null) return null
+			if (owner.module) {
+				const found = exportedConstant(owner.file, key)
+				return found ? evaluateString(found.file, found.node, depth + 1) : null
+			}
+			return evaluateString(owner.file, owner.get(key), depth + 1)
+		}
+		return null
+	}
+
+	// paths written as constants; one that cannot be worked out stays visible as <NAME>
+	for (const scan of scans) {
+		for (const route of scan.routes)
+			if (route.path === null) route.path = evaluateString(scan.file, route.pathNode) ?? `<${nameOf(route.pathNode) ?? "path"}>`
+		for (const mount of scan.mounts)
+			if (mount.prefix === null) mount.prefix = evaluateString(scan.file, mount.prefixNode) ?? `<${nameOf(mount.prefixNode) ?? "prefix"}>`
+	}
+
 	// which router object an identifier imports: users → "routes/users.js#router", { learnerRouter } → "…#learnerRouter".
 	// "*" when the file's default export is not a plain name, so the mount applies to every router in it
 	function mountKey(scan, ident) {
@@ -403,13 +584,14 @@ export function mapRoutes(root) {
 		// a root is known when it creates the app or assembles other routers (startup/routes.js);
 		// a router built in a factory and mounted by call has no known prefix
 		const root = byFile.get(file)
-		if (parents.length === 0 || seen.has(key)) return [{ prefix: "", middleware: [], anchored: Boolean(root?.createsApp || root?.mounts.length) }]
+		if (parents.length === 0 || seen.has(key)) return [{ prefix: "", middleware: [], anchored: Boolean(root?.createsApp || root?.mounts.length), rootFile: file }]
 		seen.add(key)
 		return parents.flatMap(m => {
 			const local = localContext(byFile.get(m.parent), m.owner)
 			return contexts(m.parent, local.owner, new Set(seen)).map(ctx => {
 				return {
 					anchored: ctx.anchored,
+					rootFile: ctx.rootFile,
 					prefix: joinPath(joinPath(ctx.prefix, local.prefix), m.prefix),
 					middleware: [
 						...ctx.middleware,
@@ -466,7 +648,9 @@ export function mapRoutes(root) {
 			return fn ? { fn, file: imported.file } : null
 		}
 		if (isMemberNode(target) && target.object.type === "Identifier") {
-			const file = scan.requires.get(target.object.name)
+			const file = scan.requires.get(target.object.name) ?? scan.named.get(target.object.name)?.file
+			// HistoryController.remove, with the controller defined in this file
+			if (!file) return scan.functions.has(target.property.name) ? { fn: scan.functions.get(target.property.name), file: scan.file } : null
 			const fn = byFile.get(file)?.functions.get(target.property.name)
 			return fn ? { fn, file } : null
 		}
@@ -520,6 +704,7 @@ export function mapRoutes(root) {
 				Object.defineProperty(entry, "importedFile", { value: importedFile })
 				Object.defineProperty(entry, "root", { value: root })
 				Object.defineProperty(entry, "anchored", { value: ctx.anchored })
+				Object.defineProperty(entry, "rootFile", { value: ctx.rootFile })
 				Object.defineProperty(entry, "ignored", { value: ignoredRules(scan.file, route.line) })
 				routes.push(entry)
 			}
