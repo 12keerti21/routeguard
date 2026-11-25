@@ -2,7 +2,17 @@ import { walk, isCallNode } from "../mapper.js"
 import { calleeName } from "./handler.js"
 
 // endpoints worth brute-forcing, judged on the last path segment: /auth/login, /forgot-password, /otp
-const GUESSABLE = new Set(["login", "signin", "otp", "2fa", "mfa", "totp", "verify", "forgot", "reset", "password", "register", "signup", "auth"])
+const GUESSABLE = new Set(["login", "signin", "otp", "2fa", "mfa", "totp", "verify", "forgot", "password", "register", "signup"])
+// /auth and /adminAuth are logins; /start-auth and /poll-auth are steps of someone else's OAuth flow,
+// and /reset-user-file is not a password
+const FLOW_VERB = /^(start|poll|complete|callback|refresh|begin|finish|init|link|unlink|revoke|status|o)$/
+const guessable = segment => {
+	const w = words(segment)
+	if (w.some(x => GUESSABLE.has(x))) return true
+	if (segment.toLowerCase() === "auth" || segment.toLowerCase() === "reset") return true
+	if (w.at(-1) === "auth" && !w.slice(0, -1).some(x => FLOW_VERB.test(x))) return true
+	return w.includes("reset") && w.some(x => /^(pass|password|pin|pw)$/.test(x))
+}
 // "flushProjectToTpds" has "otp" in it, "loginLimit" has "login": split into words first
 const words = segment =>
 	segment
@@ -35,7 +45,7 @@ function throttlesInCode(route, fn, file, depth = 0, seen = new Set()) {
 export function rateLimit(route) {
 	if (route.method !== "POST") return null
 	const segment = route.path.split("/").filter(s => s && !/^[:{]/.test(s)).at(-1) ?? ""
-	if (!words(segment).some(w => GUESSABLE.has(w))) return null
+	if (!guessable(segment)) return null
 	// a signed-in caller setting a password is not guessing one; a code check behind a session still is
 	if (route.auth && !CODE_CHECK.test(segment)) return null
 	if (route.middleware.some(m => LIMITER.test(m))) return null

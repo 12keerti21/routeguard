@@ -2,6 +2,14 @@ import { readdirSync, readFileSync, existsSync, statSync } from "node:fs"
 import path from "node:path"
 import { parse } from "@babel/parser"
 
+const FRAMEWORK = [
+	["express", /^express$/],
+	["fastify", /^(fastify|@fastify\/)/],
+	["koa", /^(koa|@koa\/|koa-router)/],
+	["nestjs", /^@nestjs\//],
+	["hapi", /^@hapi\/hapi$/]
+]
+
 // objects that register routes: router, app, api, apiRouter, server (not cache.get or map.get)
 const ROUTER_OWNER = /router|^app$|app\b|^api|route|server/i
 const METHODS = new Set(["get", "post", "put", "patch", "delete", "all", "options", "head"])
@@ -25,7 +33,7 @@ const PERMISSION_CALL = /(^|\.)(auth|authori[sz]e|permit|allow|can|requires?|gua
 // matched against a function's own name: isAuthenticated, checkAuth, auth.jwt, verifyToken, apiAuth
 // but not jwtChallenges or updateAuthenticatedUsers
 const AUTH =
-	/^((is|ensure|require|check|verify|validate)_?)?((api_?)?auth\w*|jwt|token|api_?key|log(ged)?_?in|protect(ed)?|guard)$|auth$/i
+	/^((is|ensure|require|check|verify|validate)_?)?((api_?)?auth\w*|jwt|token|api_?key|log(ged)?_?in|protect(ed)?|guard)$|auth$|^(is|ensure|require|check|verify|validate)_?(session|user|signed_?in)\w*$/i
 // auth.required, passport.check: the last segment says little, so the whole name decides
 const GENERIC = /^(required|check|ensure|verify|middleware|guard|protect|handler|validate)$/i
 // present in the chain but enforces nothing
@@ -139,8 +147,9 @@ function resolveModule(fromFile, spec) {
 			? path.resolve(path.dirname(fromFile), spec)
 			: resolvePackage(spec)
 	if (!base) return null
-	for (const ext of ["", ".js", ".ts", ".mjs", ".cjs", "/index.js", "/index.ts"]) {
-		const candidate = base + ext
+	// TypeScript sources import "./x.js" for a file that is x.ts on disk
+	const tsBase = base.replace(/\.(m|c)?js$/, (_, kind) => `.${kind ?? ""}ts`)
+	for (const candidate of [base, tsBase, ...["", ".js", ".ts", ".mjs", ".cjs", ".tsx", "/index.js", "/index.ts"].map(ext => base + ext)]) {
 		if (existsSync(candidate) && statSync(candidate).isFile()) return candidate
 	}
 	return null
@@ -223,7 +232,8 @@ function scanFile(file) {
 		// module.exports = router / export default router: which router a plain import gets
 		defaultExport: null,
 		createsApp: false,
-		functions: new Map()
+		functions: new Map(),
+		frameworks: new Set()
 	}
 	if (!ast) return result
 
@@ -292,6 +302,11 @@ function scanFile(file) {
 			const fn = unwrapHandler(node.right)
 			if (isFunctionNode(fn)) result.functions.set(node.left.property.name, fn)
 		}
+
+		// which web framework each file builds on, for the warning when it is not Express
+		const spec = node.type === "ImportDeclaration" ? node.source.value : isCallNode(node) && node.callee.name === "require" ? stringValue(node.arguments[0]) : null
+		const framework = spec && FRAMEWORK.find(([, pattern]) => pattern.test(spec))?.[0]
+		if (framework) result.frameworks.add(framework)
 
 		// const users = require("./users") and const { getUser } = require("./users")
 		if (node.type === "VariableDeclarator" && isCallNode(node.init) && node.init.callee.name === "require") {
@@ -369,6 +384,7 @@ function scanFile(file) {
 
 		if (!METHODS.has(method)) return
 		if (routePath !== null && rest.length > 0) {
+			if (!handlerLike(rest.at(-1))) return
 			result.routes.push(routeEntry(owner, method, routePath, rest, line))
 			return
 		}
@@ -382,8 +398,17 @@ function scanFile(file) {
 	return result
 }
 
+// what can end a route: a function, a name for one, or a call that builds one; never data
+const handlerLike = node => isFunctionNode(node) || node?.type === "Identifier" || isMemberNode(node) || isCallNode(node)
+
 function routeEntry(owner, method, routePath, args, line) {
 	return {
+		// inline middleware: (req, res, next) => { if (!req.user.admin) … } guards the route too
+		guards: args
+			.slice(0, -1)
+			.flatMap(a => (a.type === "ArrayExpression" ? a.elements : [a]))
+			.map(unwrapHandler)
+			.filter(isFunctionNode),
 		owner,
 		method: method.toUpperCase(),
 		path: routePath,
@@ -699,6 +724,7 @@ export function mapRoutes(root) {
 				Object.defineProperty(entry, "fn", { value: handler?.fn?.body ? handler.fn : null })
 				Object.defineProperty(entry, "fnFile", { value: path.relative(root, handler?.file ?? scan.file) })
 				Object.defineProperty(entry, "fnPath", { value: handler?.file ?? scan.file })
+				Object.defineProperty(entry, "guards", { value: route.guards ?? [] })
 				// lets rules follow a call from the handler into the function it names
 				Object.defineProperty(entry, "resolve", { value: resolveCallee })
 				Object.defineProperty(entry, "importedFile", { value: importedFile })
@@ -710,5 +736,10 @@ export function mapRoutes(root) {
 			}
 		}
 	}
-	return routes.sort((a, b) => a.path.localeCompare(b.path) || a.method.localeCompare(b.method))
+	routes.sort((a, b) => a.path.localeCompare(b.path) || a.method.localeCompare(b.method))
+	// how many files build on each framework: an app built on another one is read only in part
+	const frameworks = {}
+	for (const scan of scans) for (const f of scan.frameworks) frameworks[f] = (frameworks[f] ?? 0) + 1
+	Object.defineProperty(routes, "frameworks", { value: frameworks })
+	return routes
 }

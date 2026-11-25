@@ -43,6 +43,9 @@ if (!target || !SEVERITIES.includes(failOn) || (verifying && (!option("--base-ur
 }
 
 const routes = mapRoutes(path.resolve(target))
+const other = Object.entries(routes.frameworks).filter(([f]) => f !== "express").sort((a, b) => b[1] - a[1])
+if (other.length && other[0][1] > (routes.frameworks.express ?? 0))
+	console.error(`warning: this looks like a ${other[0][0]} app (${other[0][1]} files, ${routes.frameworks.express ?? 0} using Express). routeguard reads Express routes only, so these results are unreliable.`)
 const suppressed = (route, finding) => route.ignored === "all" || route.ignored?.has(finding.rule)
 // a router mounted twice reports the same code twice
 const seen = new Set()

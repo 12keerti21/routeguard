@@ -3,6 +3,8 @@ import { walk, isMemberNode } from "../mapper.js"
 import { traceRoute } from "../flow.js"
 import { RECORD_ACCESS, checksBodyCredential, dbCalls, handlerParams, hasRole, isMember, whereOf } from "./handler.js"
 
+// /:courseId, /:pk, /:slug, /:username name a record; /:provider, /:chunk, /:lang do not
+const RECORD_PARAM = /(id|ids|uuid|guid|pk|key|slug|code|token|hash|ref|no|num|number|name|user|email|handle|sid)$/i
 const SECRET_PARAM = /token|code|hash|secret|otp|nonce|signature|key|session/i
 
 // names that carry a value from req.params: const id = req.params.id, const { id } = req.params
@@ -39,6 +41,7 @@ export function bola(route) {
 	// /reset/:token, /verify/:code: an unguessable secret in the URL is the authorisation
 	const params = route.path.match(/[:{](\w+)/g)?.map(p => p.slice(1)) ?? []
 	if (params.length && params.every(p => SECRET_PARAM.test(p))) return null
+	if (!params.some(p => RECORD_PARAM.test(p))) return null
 
 	const { req } = handlerParams(route.fn)
 	const derived = paramDerivedNames(route.fn, req)

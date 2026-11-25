@@ -180,7 +180,7 @@ Leave out the rule name to silence every rule for that route.
 
 ## Results
 
-Tested on deliberately vulnerable APIs and 14 open-source Express apps (1,400+ routes). See
+Tested on deliberately vulnerable APIs and 18 open-source Express apps (about 1,950 routes). See
 [benchmark.md](https://github.com/12keerti21/routeguard/blob/main/benchmark.md).
 
 ## Development

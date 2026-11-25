@@ -10,6 +10,7 @@ const SENSITIVE = /(^|\/)(admin|internal|manage|system|config|debug|metrics|logs
 function sensitiveSeverity(route) {
 	// the handler looks at the caller itself (empty answer for anonymous users), so the gap is narrower
 	if (route.fn && readsIdentity(route.fn)) return "LOW"
+	if (/html|page|index|spa|static|view|render/i.test(route.handler)) return "LOW"
 	if (route.middleware.some(m => /api.?(key|auth)|basic/i.test(m))) return "LOW"
 	if (route.fn && dbCalls(route.fn, DB_CALL).length === 0 && dbCalls(route.fn, PAGE_ONLY).length > 0) return "LOW"
 	return "HIGH"
@@ -20,6 +21,8 @@ export function bfla(route) {
 	if (hasRole(route)) return null
 
 	const sensitive = route.path.match(SENSITIVE)
+	// a password in the body guards it (a one-time bootstrap, a confirm-with-password step)
+	if (sensitive && route.fn && checksBodyCredential(route.fn)) return null
 	if (sensitive) {
 		return {
 			rule: "BFLA",

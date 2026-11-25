@@ -5,7 +5,7 @@ import { DB_CALL, DB_WRITE, handlerParams, isMember } from "./rules/handler.js"
 const CHECK_FN = /can[A-Z_]|check|assert|ensure|reach|access|permi(t|ssion)|authori[sz]|verify|owned|own[A-Z]|allowed|guard|scope/i
 // an unresolved call that looks like it loads a record: userService.getUserById(id)
 const SERVICE_LOOKUP = /^(get|find|fetch|load|read|update|edit|patch|delete|remove|destroy|archive)[A-Z_]/
-const IDENTITY_KEYS = new Set(["user", "auth", "session", "userId", "currentUser"])
+const IDENTITY_KEYS = new Set(["user", "auth", "session", "userId", "currentUser", "principal", "identity", "actor", "accountability", "claims"])
 const IDENTITY_FN = /user|auth|jwt|token|session|identity|principal|caller/i
 const APPENDS_USER = /(append|set|attach|inject|add)_?user/i
 const BODY_USER_FIELD = /^(user_?id|owner_?id|owner)$/i

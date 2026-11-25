@@ -13,7 +13,8 @@ export const DB_WRITE =
 	/^(save|create|insert|insertOne|insertMany|upsert|bulkCreate|update|updateOne|updateMany|findByIdAnd(Update|Delete|Remove)|findOneAnd(Update|Delete|Remove|Replace)|delete|deleteOne|deleteMany|destroy|remove|replaceOne)$/
 
 // where the signed-in caller's identity usually lives
-const IDENTITY_KEYS = new Set(["user", "auth", "session", "userId", "currentUser"])
+// the request property that stands for the caller, under the names frameworks give it
+const IDENTITY_KEYS = new Set(["user", "auth", "session", "userId", "currentUser", "principal", "identity", "actor", "accountability", "claims"])
 
 export const isMember = (node, objectName, propertyName) =>
 	isMemberNode(node) &&
@@ -124,7 +125,7 @@ export function checksBodyCredential(fn) {
 	return found
 }
 
-export const hasRole = route => route.role || checksRoleInline(route.fn)
+export const hasRole = route => route.role || checksRoleInline(route.fn) || (route.guards ?? []).some(checksRoleInline)
 
 // findings point at the line in the handler, which may live in a controller file
 export const whereOf = (route, line) => `${route.fnFile ?? route.file}:${line}`
