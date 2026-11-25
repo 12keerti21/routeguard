@@ -62,6 +62,18 @@ test("django: ROOT_URLCONF, include, DRF routers, default permissions, AllowAny 
 	assert.ok(findings.some(f => f.rule === "ERROR_LEAK" && /DEBUG/.test(f.message)))
 })
 
+test("drf: delegated checks, a urls.py reached through include, replaced secrets, allow-listed CORS and format-only jwt.decode", async () => {
+	const { byRoute, findings, has } = await scan("drf")
+	assert.ok(!has("BOLA", "DELETE /integrations/{integration_id}"), "Action.do(request.user, integration) gets the caller with the record")
+	assert.ok(has("BOLA", "DELETE /notes/{note_id}"))
+	assert.ok(has("BOLA", "DELETE /links/{link_id}"))
+	assert.ok(!byRoute.has("DELETE /{link_id}"), "the included urls.py is kept only under its prefix")
+	const secret = findings.find(f => f.rule === "JWT" && /SECRET_KEY/.test(f.message))
+	assert.equal(secret.severity, "LOW", "prod.py reads SECRET_KEY from the environment")
+	assert.ok(!findings.some(f => f.rule === "CORS"), "the origin is checked against settings first")
+	assert.ok(!findings.some(f => /signature/.test(f.message)), "a decode whose result nobody reads decides nothing")
+})
+
 test("a directory with no Python files maps no Python routes", async () => {
 	assert.equal((await mapPyRoutes(new URL("./fixtures/app", import.meta.url).pathname)).length, 0)
 })
