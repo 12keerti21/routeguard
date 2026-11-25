@@ -1,6 +1,6 @@
 {
   "name": "routeguard",
-  "version": "0.1.0",
+  "version": "0.6.0",
   "description": "Map Express routes to their auth and role checks, and flag OWASP API authorisation risks",
   "type": "module",
   "bin": {
