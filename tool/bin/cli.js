@@ -25,7 +25,7 @@ const finish = code => process.stdout.write("", () => process.exit(code))
 // routeguard verify <dir> --base-url … --config …: replay the routes against a running app
 const verifying = process.argv[2] === "verify"
 const args = process.argv.slice(verifying ? 3 : 2)
-const VALUE_FLAGS = new Set(["--fail-on", "--base-url", "--config"])
+const VALUE_FLAGS = new Set(["--fail-on", "--base-url", "--config", "--canary-host"])
 const option = name => {
 	const i = args.indexOf(name)
 	return i === -1 ? null : args[i + 1]
@@ -38,7 +38,7 @@ const target = args.find((a, i) => !a.startsWith("--") && !VALUE_FLAGS.has(args[
 
 if (!target || !SEVERITIES.includes(failOn) || (verifying && (!option("--base-url") || !option("--config")))) {
 	console.error("Usage: routeguard <express-project-dir> [--json | --sarif] [--fail-on LOW|MEDIUM|HIGH]")
-	console.error("       routeguard verify <express-project-dir> --base-url <url> --config <file.json> [--allow-writes] [--json]")
+	console.error("       routeguard verify <express-project-dir> --base-url <url> --config <file.json> [--allow-writes] [--probe-rate-limits] [--probe-ssrf [--canary-host <host>]] [--json]")
 	process.exit(1)
 }
 
@@ -89,7 +89,7 @@ function printVerification(results) {
 		console.log("")
 	}
 	const order = { CONFIRMED: 0, INCONCLUSIVE: 1, PUBLIC: 2, PROTECTED: 3, SKIPPED: 4 }
-	const sorted = [...results].sort((a, b) => order[a.verdict] - order[b.verdict])
+	const sorted = [...results].filter(r => !r.probe).sort((a, b) => order[a.verdict] - order[b.verdict])
 	for (const r of sorted) {
 		const codes = r.status ? `owner ${r.status.owner ?? "-"} · other ${r.status.other} · anonymous ${r.status.anonymous}` : ""
 		const agreement =
@@ -100,15 +100,25 @@ function printVerification(results) {
 		console.log(`[${r.verdict}] ${r.route}${codes ? `  (${codes})` : ""}`)
 		console.log(`  ${r.reason}${agreement ? ` · ${agreement}` : ""}`)
 	}
-	const count = verdict => results.filter(r => r.verdict === verdict).length
-	console.log(`\n${results.length} routes replayed · ${count("CONFIRMED")} confirmed · ${count("PUBLIC")} public · ${count("PROTECTED")} protected · ${count("INCONCLUSIVE")} inconclusive · ${count("SKIPPED")} skipped`)
+	const probes = [...results].filter(r => r.probe).sort((a, b) => order[a.verdict] - order[b.verdict])
+	if (probes.length) console.log("\nProbes:")
+	for (const r of probes) console.log(`[${r.verdict}] ${r.probe}  ${r.route}\n  ${r.reason}`)
+	const count = verdict => sorted.filter(r => r.verdict === verdict).length
+	console.log(`\n${sorted.length} routes replayed, ${probes.length} probes · ${count("CONFIRMED")} confirmed · ${count("PUBLIC")} public · ${count("PROTECTED")} protected · ${count("INCONCLUSIVE")} inconclusive · ${count("SKIPPED")} skipped`)
 }
 
 const exitCode = findings.some(f => SEVERITIES.indexOf(f.severity) >= SEVERITIES.indexOf(failOn)) ? 2 : 0
 
 if (verifying) {
 	const config = JSON.parse(readFileSync(path.resolve(option("--config")), "utf8"))
-	const results = await verify({ routes, findings, baseUrl: option("--base-url"), config, allowWrites: args.includes("--allow-writes") })
+	const results = await verify({ routes, findings, baseUrl: option("--base-url"), config,
+		allowWrites: args.includes("--allow-writes"),
+		probeOptions: {
+			rateLimits: args.includes("--probe-rate-limits"),
+			ssrf: args.includes("--probe-ssrf"),
+			canaryHost: option("--canary-host") ?? config.canaryHost
+		}
+	})
 	if (json) console.log(JSON.stringify(results, null, 2))
 	else printVerification(results)
 	finish(results.some(r => r.verdict === "CONFIRMED") ? 2 : 0)

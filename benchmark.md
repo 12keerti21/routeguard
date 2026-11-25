@@ -69,6 +69,17 @@ Bugs routeguard also found that the projects do not list:
 
 Fourteen routes replayed, including the static scan, in under a second.
 
+The probes on the same run, with `--probe-rate-limits --probe-ssrf`:
+
+| Probe | Verdict |
+|---|---|
+| Forged JWT | CONFIRMED: a token with `alg: none` is accepted |
+| SSRF | CONFIRMED: `POST /profile/image/url` fetched the URL sent in `imageUrl` |
+| Rate limits | CONFIRMED: 20 wrong logins in a row on `/rest/user/login` and three passkey routes, none limited |
+| Error leaks | CONFIRMED: a malformed id on `GET /api/Recycles/:id` returns a parser error |
+| CORS | PUBLIC: `*` without credentials |
+| Security headers | PROTECTED: `nosniff` set, framework not named |
+
 ## 4. Noise on real applications
 
 Eighteen open-source Express apps, most of them well maintained. A good result here is few findings,

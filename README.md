@@ -116,6 +116,27 @@ client key (RFC 9449): routeguard keeps a key per user and signs a fresh proof f
 
 Prompts read from the terminal, or one answer per line from standard input when another program runs
 the check. Two users getting the same *empty* answer is reported as inconclusive, not as a leak.
+Set `"cookie": "token"` on a user when the app also reads the token from a cookie of that name.
+
+**Probes beyond access control.** After the replay, `verify` checks the rest of the list on the running
+app. These only read, and always run:
+
+| Probe | OWASP | What it does |
+|---|---|---|
+| CORS | API8 | Sends a foreign `Origin`. Confirmed when the app echoes it with `Allow-Credentials: true`. |
+| Security headers | API8 | Looks for `X-Powered-By`, a missing `nosniff`, and missing HSTS on https. |
+| Data exposure | API3 | Looks for secret fields (`password`, `passwordHash`, `apiKey`, `resetToken`…) in the real answers. Reports the field names, never the values. |
+| Error leaks | API8 | Requests id routes with a malformed id and looks for stack traces and database driver errors. |
+| Forged JWT | API2 | Sends the owner's token with `alg: none`, and with a changed claim and the old signature. Confirmed when either is accepted. |
+| Development routes | API9 | Requests the routes the scan flagged as development-only, without credentials. |
+
+Two probes send requests that can have effects, so they run only when asked:
+
+- `--probe-rate-limits` (API4): sends 20 wrong logins for a made-up account to each login, OTP and
+  reset route the scan flagged. Protected when the app answers 429, 423 or `Retry-After`.
+- `--probe-ssrf` (API7): starts a listener on this machine and sends its URL, as the owner, in the
+  field the scan found the server fetching (as JSON, then as a form). Confirmed when the app calls it.
+  When the app runs in Docker, add `--canary-host host.docker.internal` (or `canaryHost` in the config).
 
 ### In GitHub Actions
 
@@ -175,6 +196,7 @@ Leave out the rule name to silence every rule for that route.
 ## Limits
 
 - Static analysis trusts what a check returns. If `canEdit()` itself has a logic bug, only `verify` against a running app will show it.
+- Probes only see what the sampled routes return: a clean result means none of those leaked, not that no route does.
 - Static analysis cannot know an id is unguessable. Capability links need a `routeguard-ignore` comment.
 - Express only for now.
 

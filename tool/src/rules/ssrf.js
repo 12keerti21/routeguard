@@ -1,5 +1,5 @@
-import { walk, isCallNode } from "../mapper.js"
-import { calleeName, calleeObject, userInput, whereOf } from "./handler.js"
+import { walk, isCallNode, isMemberNode } from "../mapper.js"
+import { calleeName, calleeObject, handlerParams, isMember, userInput, whereOf } from "./handler.js"
 
 const CLIENT_FN = new Set(["fetch", "axios", "got", "needle", "request", "superagent"])
 const CLIENT_OBJ = new Set(["axios", "got", "needle", "request", "superagent", "http", "https", "undici", "ky"])
@@ -19,6 +19,22 @@ function fixedHost(node, inits) {
 	if (value?.type === "TemplateLiteral") return FIXED_HOST.test(value.quasis[0].value.cooked)
 	if (value?.type === "BinaryExpression") return value.left.type === "StringLiteral" ? FIXED_HOST.test(value.left.value) : fixedHost(value.left, inits)
 	return false
+}
+
+// where the URL comes from: req.body.url, req.query.location, or a variable built from one,
+// so a runtime probe knows which field to fill
+function inputOf(node, inits, req, seen = new Set()) {
+	let found = null
+	walk(node, n => {
+		if (found) return
+		if (isMemberNode(n) && isMember(n.object, req) && /^(body|query|params)$/.test(n.object.property.name) && n.property?.name)
+			found = { in: n.object.property.name, name: n.property.name }
+		else if (n.type === "Identifier" && inits.has(n.name) && !seen.has(n.name)) {
+			seen.add(n.name)
+			found = inputOf(inits.get(n.name), inits, req, seen)
+		}
+	})
+	return found
 }
 
 // API7: the server fetches a URL the client chose, so it can be pointed at internal services
@@ -52,6 +68,7 @@ export function ssrf(route) {
 			: `${client}() requests a URL the client controls, so the server can be sent to internal hosts or 169.254.169.254.`,
 		fix: fixed
 			? "Encode the value (encodeURIComponent) and validate it against what the API expects."
-			: "Allow only known hosts: parse with new URL(), check url.hostname against an allow-list, and block private and link-local addresses."
+			: "Allow only known hosts: parse with new URL(), check url.hostname against an allow-list, and block private and link-local addresses.",
+		input: inputOf(hit.arg, inits, handlerParams(route.fn).req)
 	}
 }

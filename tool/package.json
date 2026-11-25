@@ -1,6 +1,6 @@
 {
   "name": "routeguard-cli",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "Find broken authorisation in Express APIs: maps routes to their checks and flags the OWASP API Security Top 10",
   "type": "module",
   "bin": {

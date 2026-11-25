@@ -3,6 +3,7 @@
 import { createHash, generateKeyPairSync, randomUUID, sign } from "node:crypto"
 import readline from "node:readline/promises"
 import { discoverParams } from "./discover.js"
+import { runProbes } from "./probes.js"
 
 const WRITE = new Set(["PUT", "PATCH", "DELETE", "POST"])
 const OK = status => status >= 200 && status < 300
@@ -18,20 +19,21 @@ function expand(value) {
 
 const pick = (object, dotted) => dotted.split(".").reduce((o, k) => o?.[k], object)
 
-async function call(baseUrl, method, path, headers = {}, body, timeoutMs) {
+export async function call(baseUrl, method, path, headers = {}, body, timeoutMs) {
+	const form = body instanceof URLSearchParams
 	const controller = new AbortController()
 	const timer = setTimeout(() => controller.abort(), timeoutMs)
 	try {
 		const res = await fetch(new URL(path, baseUrl), {
 			method,
-			headers: { accept: "application/json", ...(body ? { "content-type": "application/json" } : {}), ...headers },
-			body: body ? JSON.stringify(body) : undefined,
+			headers: { accept: "application/json", ...(body ? { "content-type": form ? "application/x-www-form-urlencoded" : "application/json" } : {}), ...headers },
+			body: body ? (form ? String(body) : JSON.stringify(body)) : undefined,
 			redirect: "manual",
 			signal: controller.signal
 		})
-		return { status: res.status, text: await res.text() }
+		return { status: res.status, text: await res.text(), headers: Object.fromEntries(res.headers) }
 	} catch (error) {
-		return { status: 0, text: "", error: error.name === "AbortError" ? "timeout" : error.message }
+		return { status: 0, text: "", headers: {}, error: error.name === "AbortError" ? "timeout" : error.message }
 	} finally {
 		clearTimeout(timer)
 	}
@@ -94,7 +96,14 @@ async function askInTerminal(label) {
 // for each request (a DPoP user signs a new proof every time)
 async function signIn(baseUrl, user, settings, timeoutMs, ask = askInTerminal) {
 	if (!user) return null
-	if (user.headers) return () => user.headers
+	if (user.headers) {
+		// a JWT among fixed headers can be swapped for a forged copy too
+		const token = Object.values(user.headers).map(v => String(v).match(/[\w-]+\.[\w-]+\.[\w-]*/)?.[0]).find(Boolean)
+		const headersFor = (method, path, forged) =>
+			forged && token ? Object.fromEntries(Object.entries(user.headers).map(([k, v]) => [k, String(v).replace(token, forged)])) : user.headers
+		headersFor.token = token
+		return headersFor
+	}
 	const key = user.dpop ? dpopKey() : null
 	const origin = String(settings.dpopOrigin ?? baseUrl).replace(/\/+$/, "")
 	const htu = path => `${origin}${path.split("?")[0]}`
@@ -120,7 +129,15 @@ async function signIn(baseUrl, user, settings, timeoutMs, ask = askInTerminal) {
 	const last = steps.at(-1)
 	const scheme = user.scheme ?? last.prefix?.trim() ?? (key ? "DPoP" : "Bearer")
 	const header = last.header ?? "Authorization"
-	return (method, path) => ({ [header]: `${scheme} ${token}`, ...(key ? { DPoP: dpopProof(key, method, htu(path), token) } : {}) })
+	// forged: a probe sends a doctored copy of the token, signed for DPoP like the real one
+	// cookie: apps that also read the token from a cookie by this name
+	const headersFor = (method, path, forged = token) => ({
+		[header]: `${scheme} ${forged}`,
+		...(user.cookie ? { Cookie: `${user.cookie}=${forged}` } : {}),
+		...(key ? { DPoP: dpopProof(key, method, htu(path), forged) } : {})
+	})
+	headersFor.token = token
+	return headersFor
 }
 
 // the same object, by content: ignore key order and timestamps that change between calls
@@ -184,7 +201,7 @@ function candidates(routes, findings, allowWrites) {
 }
 
 // owner: the user who owns the ids in the config · other: a second ordinary user · anonymous: no credentials
-export async function verify({ routes, findings, baseUrl, config, allowWrites = false, timeoutMs = 10000, ask }) {
+export async function verify({ routes, findings, baseUrl, config, allowWrites = false, timeoutMs = 10000, ask, probeOptions = {} }) {
 	const settings = expand(config)
 	const prefix = settings.pathPrefix ?? ""
 	const headers = {
@@ -203,6 +220,7 @@ export async function verify({ routes, findings, baseUrl, config, allowWrites = 
 	}
 
 	const results = []
+	const answers = []
 	for (const { route, staticRule } of candidates(routes, findings, allowWrites)) {
 		const found = perRoute.get(route.path) ?? { values: {}, sources: {} }
 		const { path, missing } = fillPath(route, { ...found.values, ...params }, settings.routes ?? {})
@@ -217,6 +235,7 @@ export async function verify({ routes, findings, baseUrl, config, allowWrites = 
 		const owner = WRITE.has(route.method) ? null : await call(baseUrl, route.method, url, headers.owner(route.method, url), body, timeoutMs)
 		const other = await call(baseUrl, route.method, url, headers.other(route.method, url), body, timeoutMs)
 		const anonymous = await call(baseUrl, route.method, url, {}, body, timeoutMs)
+		answers.push({ route, url, owner, other, anonymous })
 		let verdict = judge(route, staticRule, owner, other, anonymous, url)
 		// an id the other user can also list may be theirs to read, so reading it proves nothing
 		const shared = Object.values(found.sources).filter(d => !d.ownerOnly)
@@ -224,6 +243,14 @@ export async function verify({ routes, findings, baseUrl, config, allowWrites = 
 			verdict = { verdict: "INCONCLUSIVE", reason: `the other user can also list :${shared.map(d => d.param).join(", :")}, so reading it may be allowed; give an id only the owner has` }
 		results.push({ route: key, path: url, staticRule, ...verdict, status: { owner: owner?.status, other: other.status, anonymous: anonymous.status } })
 	}
+	// probe urls carry the prefix, like the answers above
+	const fill = route => {
+		const { path, missing } = fillPath(route, { ...(perRoute.get(route.path)?.values ?? {}), ...params }, settings.routes ?? {})
+		return { path: prefix + path, missing }
+	}
+	const send = (method, url, headersFor, body) => call(baseUrl, method, url, headersFor, body, timeoutMs)
+	const probeContext = { baseUrl, prefix, headers, routes, findings, answers, fill, send, probes: probeOptions }
+	results.push(...(await runProbes(probeContext)))
 	Object.defineProperty(results, "discovered", { value: discovered })
 	return results
 }
