@@ -10,7 +10,8 @@ const PROBE_ORIGIN = "https://routeguard-probe.invalid"
 const SECRET_FIELD = /^(password|passwd|password_?hash|hash(ed)?_?password|salt|secret|client_?secret|api_?key|private_?key|refresh_?token|reset_?token|otp|otp_?hash|totp_?secret|mfa_?secret|ssn)$/i
 // routes that hand out tokens on purpose; only their token fields are let through
 const ISSUES_TOKENS = /login|signin|sign-in|token|auth|refresh|session|verify|otp/i
-const STACK_TRACE = /\n\s+at \S+.*\(?\/?[\w./-]+:\d+:\d+\)?|node_modules\/|(CastError|MongoServerError|ValidationError|SequelizeDatabaseError|QueryFailedError|PrismaClientKnownRequestError|ER_PARSE_ERROR|SyntaxError: Unexpected)/
+// Node, Go, Python and Java stack traces, and database driver errors
+const STACK_TRACE = /\n\s+at \S+.*\(?\/?[\w./-]+:\d+:\d+\)?|node_modules\/|(CastError|MongoServerError|ValidationError|SequelizeDatabaseError|QueryFailedError|PrismaClientKnownRequestError|ER_PARSE_ERROR|SyntaxError: Unexpected|goroutine \d+ \[|\.go:\d+ \+0x|Traceback \(most recent call last\)|\n\s+at [\w.$]+\([\w.]+\.java:\d+\)|pq: |SQLSTATE|sql: )/
 const MALFORMED_ID = `rg'"<probe>${"9".repeat(40)}`
 
 const result = (probe, route, verdict, reason, staticRule = null) => ({ route, staticRule, verdict, reason, probe })
@@ -52,10 +53,18 @@ function securityHeaders({ answers, baseUrl }) {
 		: [result("SECURITY_HEADERS", "(app-wide)", "PROTECTED", "nosniff set and the framework is not named")]
 }
 
-// API3: secrets inside real answers. Only field names are reported, never their values
-function dataExposure({ answers }) {
+// API3: secrets inside real answers. Only field names are reported, never their values.
+// Besides the replayed routes, the owner reads up to 20 GET routes that take no id (/me, /settings)
+async function dataExposure({ answers, routes, headers, send, prefix }) {
 	const hits = []
-	for (const { route, url, owner, other } of answers) {
+	const replayed = new Set(answers.map(a => `${a.route.method} ${a.route.path}`))
+	const extra = routes.filter(r => r.method === "GET" && !/[:{*<]/.test(r.path) && !replayed.has(`${r.method} ${r.path}`)).slice(0, 20)
+	const reads = [...answers]
+	for (const route of extra) {
+		const url = prefix + route.path
+		reads.push({ route, url, owner: await send("GET", url, headers.owner("GET", url)), other: null })
+	}
+	for (const { route, url, owner, other } of reads) {
 		const tokenRoute = ISSUES_TOKENS.test(route.path)
 		for (const response of [owner, other]) {
 			if (!response || !OK(response.status)) continue
@@ -206,7 +215,7 @@ export async function runProbes(context) {
 	const all = [
 		...(await cors(context)),
 		...securityHeaders(context),
-		...dataExposure(context),
+		...(await dataExposure(context)),
 		...(await errorLeaks(context)),
 		...(await jwtForgery(context)),
 		...(await devRoutes(context))

@@ -1,7 +1,7 @@
 {
   "name": "routeguard-cli",
-  "version": "1.5.0",
-  "description": "Find broken authorisation in Express APIs: maps routes to their checks and flags the OWASP API Security Top 10",
+  "version": "2.0.0",
+  "description": "Find broken authorisation in Express and Go APIs: maps routes to their checks and flags the OWASP API Security Top 10",
   "type": "module",
   "bin": {
     "routeguard": "bin/cli.js"
@@ -16,13 +16,20 @@
   },
   "license": "MIT",
   "dependencies": {
-    "@babel/parser": "^7.29.15"
+    "@babel/parser": "^7.29.15",
+    "web-tree-sitter": "0.25.10"
   },
   "keywords": [
     "security",
     "owasp",
     "api-security",
     "express",
+    "go",
+    "golang",
+    "gin",
+    "echo",
+    "fiber",
+    "chi",
     "authorization",
     "bola",
     "sast",
@@ -41,6 +48,7 @@
   "files": [
     "bin",
     "src",
+    "vendor",
     "README.md",
     "LICENSE"
   ]

@@ -14,8 +14,20 @@ import { inventory } from "../src/rules/inventory.js"
 import { businessFlow } from "../src/rules/businessFlow.js"
 import { consumption } from "../src/rules/consumption.js"
 import { verify } from "../src/verify.js"
+import { mapGoRoutes } from "../src/go/mapper.js"
+import { GO_RULES } from "../src/go/rules.js"
+import { goAppRules } from "../src/go/app.js"
 
 const RULES = [bola, bfla, massAssignment, dataExposure, ssrf, rateLimit, businessFlow]
+// Go handlers get their own code checks; the path-only checks are shared
+const RULES_GO = [...GO_RULES, bfla, rateLimit, businessFlow]
+// the shared checks suggest Express middleware; Go apps get Go advice
+const GO_FIX = {
+	RATE_LIMIT: "Add a limiter keyed on the caller and the account, e.g. golang.org/x/time/rate or a middleware such as ulule/limiter, on this route.",
+	BUSINESS_FLOW: "Limit per account and per device, add a captcha or a queue for the flow, and alert on bursts.",
+	BFLA: "Add a role-checking middleware to the route, or remove it from production builds.",
+	NON_PROD_ROUTE: "Remove it from production builds, or register it only when a debug setting is on."
+}
 
 const SEVERITIES = ["LOW", "MEDIUM", "HIGH"]
 
@@ -42,20 +54,30 @@ if (!target || !SEVERITIES.includes(failOn) || (verifying && (!option("--base-ur
 	process.exit(1)
 }
 
-const routes = mapRoutes(path.resolve(target))
-const other = Object.entries(routes.frameworks).filter(([f]) => f !== "express").sort((a, b) => b[1] - a[1])
-if (other.length && other[0][1] > (routes.frameworks.express ?? 0))
-	console.error(`warning: this looks like a ${other[0][0]} app (${other[0][1]} files, ${routes.frameworks.express ?? 0} using Express). routeguard reads Express routes only, so these results are unreliable.`)
+// Go advice, and a lower severity for operator routes that exist only when a setting turns them on
+function goAdvice(route, f) {
+	const out = GO_FIX[f.rule] ? { ...f, fix: GO_FIX[f.rule] } : f
+	if (route.conditional && ["BFLA", "NON_PROD_ROUTE"].includes(f.rule) && f.severity !== "LOW")
+		return { ...out, severity: "LOW", message: `${out.message} It is registered only when ${route.conditional} holds.` }
+	return out
+}
+const jsRoutes = mapRoutes(path.resolve(target))
+const goRoutes = await mapGoRoutes(path.resolve(target))
+const routes = [...jsRoutes, ...goRoutes]
+const other = Object.entries(jsRoutes.frameworks).filter(([f]) => f !== "express").sort((a, b) => b[1] - a[1])
+if (goRoutes.length === 0 && other.length && other[0][1] > (jsRoutes.frameworks.express ?? 0))
+	console.error(`warning: this looks like a ${other[0][0]} app (${other[0][1]} files, ${jsRoutes.frameworks.express ?? 0} using Express). routeguard reads Express and Go routes only, so these results are unreliable.`)
 const suppressed = (route, finding) => route.ignored === "all" || route.ignored?.has(finding.rule)
 // a router mounted twice reports the same code twice
 const seen = new Set()
 const root = path.resolve(target)
 const findings = [
-	...routes.flatMap(r => RULES.map(rule => rule(r)).filter(f => f && !suppressed(r, f))),
+	...jsRoutes.flatMap(r => RULES.map(rule => rule(r)).filter(f => f && !suppressed(r, f))),
+	...goRoutes.flatMap(r => RULES_GO.map(rule => rule(r)).filter(f => f && !suppressed(r, f)).map(f => goAdvice(r, f))),
 	// checks that look at the app as a whole, not one route
-	...inventory(routes, root),
-	...misconfig(root),
-	...consumption(root)
+	...inventory(routes, root).map(f => (goRoutes.length && !jsRoutes.length && GO_FIX[f.rule] ? { ...f, fix: GO_FIX[f.rule] } : f)),
+	...(jsRoutes.length || !goRoutes.length ? [...misconfig(root), ...consumption(root)] : []),
+	...(goRoutes.length ? goAppRules(goRoutes) : [])
 ].filter(f => !seen.has(`${f.rule} ${f.route} ${f.where}`) && seen.add(`${f.rule} ${f.route} ${f.where}`))
 
 function printReport() {

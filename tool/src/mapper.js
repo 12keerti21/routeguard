@@ -450,7 +450,7 @@ export function classify(middleware) {
 const IGNORE = /routeguard-ignore(?:\s+([A-Z_, ]+))?/
 const fileLines = new Map()
 
-function ignoredRules(file, line) {
+export function ignoredRules(file, line) {
 	if (!fileLines.has(file)) fileLines.set(file, readFileSync(file, "utf8").split("\n"))
 	const above = fileLines.get(file).slice(Math.max(0, line - 4), line).join("\n")
 	const match = above.match(IGNORE)

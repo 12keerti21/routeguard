@@ -1,8 +1,8 @@
 # routeguard
 
-**Find broken authorisation in Express APIs before attackers do.**
+**Find broken authorisation in Express and Go APIs before attackers do.**
 
-routeguard reads your Express code without running it. It maps every route to the checks that protect
+routeguard reads your Express or Go code without running it. It maps every route to the checks that protect
 it, then flags the [OWASP API Security Top 10](https://owasp.org/API-Security/editions/2023/en/0x11-t10/)
 risks that general code scanners miss. The biggest of these is one user reaching another user's data.
 
@@ -44,21 +44,27 @@ vulnerable API, Semgrep found 1 of 9 bugs and Bearer found none ([benchmark](htt
 ## Use it
 
 ```bash
-npx routeguard-cli <path-to-express-app>
+npx routeguard-cli <path-to-your-api>
 ```
 
 Or install it with `npm install -g routeguard-cli` and run `routeguard`. From a clone of this repo:
 
 ```bash
 cd tool && npm install
-node bin/cli.js <path-to-express-app>                 # table and findings
-node bin/cli.js <path-to-express-app> --json          # machine-readable
-node bin/cli.js <path-to-express-app> --sarif         # for GitHub code scanning
-node bin/cli.js <path-to-express-app> --fail-on HIGH  # exit 2 only on HIGH findings
+node bin/cli.js <path-to-your-api>                 # table and findings
+node bin/cli.js <path-to-your-api> --json          # machine-readable
+node bin/cli.js <path-to-your-api> --sarif         # for GitHub code scanning
+node bin/cli.js <path-to-your-api> --fail-on HIGH  # exit 2 only on HIGH findings
 ```
 
-Requires Node 20 or later. Works with JavaScript and TypeScript, `require` and `import`, monorepos and
-package.json `#imports`.
+Requires Node 20 or later, and no Go toolchain. It reads:
+
+- **Express**: JavaScript and TypeScript, `require` and `import`, monorepos and package.json `#imports`.
+- **Go**: Gin, Echo, Fiber, chi, gorilla/mux, httprouter and `net/http` (including Go 1.22 patterns such
+  as `"GET /items/{id}"`). Routers are followed through groups, sub-routers, mounts, routers kept in
+  struct fields and routers passed to other packages; middleware is read from `Use`, group arguments,
+  wrapped handlers (`auth(h)`) and wrapped muxes (`auth(mux)`), and auth checks made first thing in a
+  handler count too. Go code is parsed with tree-sitter, so a repo with both languages gets both.
 
 ### Confirm findings against a running app
 
@@ -189,8 +195,9 @@ Leave out the rule name to silence every rule for that route.
 2. **Read the handlers.** Finds each route's handler, even in another file, a controller object or a
    wrapper like `catchAsync(...)`.
 3. **Follow the data.** For object-level checks, traces the URL id from the handler into the
-   services it calls. It looks for the caller (`req.user`) limiting that id along the way: in the
-   query, in a comparison, or in a check such as `canEdit(user, course)`.
+   services it calls. It looks for the caller (`req.user`, `c.Get("userID")`, `ctx.Value(userKey)`)
+   limiting that id along the way: in the query, in a comparison, or in a check such as
+   `canEdit(user, course)`.
 4. **Report.** Each finding has a severity, the OWASP category, the file and line, and a fix.
 
 ## Limits
@@ -198,11 +205,13 @@ Leave out the rule name to silence every rule for that route.
 - Static analysis trusts what a check returns. If `canEdit()` itself has a logic bug, only `verify` against a running app will show it.
 - Probes only see what the sampled routes return: a clean result means none of those leaked, not that no route does.
 - Static analysis cannot know an id is unguessable. Capability links need a `routeguard-ignore` comment.
-- Express only for now.
+- Express and Go only for now. Other Node frameworks (Fastify, NestJS, Koa) get a warning instead of results.
+- Go routes registered from data at runtime, or through a project's own routing layer, may be missed or left with an unresolved `<prefix>`.
 
 ## Results
 
-Tested on deliberately vulnerable APIs and 18 open-source Express apps (about 1,950 routes). See
+Tested on deliberately vulnerable APIs, 18 open-source Express apps (about 1,950 routes) and 14 Go
+apps (about 3,150 routes). See
 [benchmark.md](https://github.com/12keerti21/routeguard/blob/main/benchmark.md).
 
 ## Development

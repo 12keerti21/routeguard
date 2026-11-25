@@ -128,3 +128,60 @@ No HIGH or MEDIUM finding was a plain false positive. Scanning all 18 apps (1,94
 
 Not included: Wiki.js 3 is built on Fastify, and routeguard says so and stops trusting its own results
 there; Habitica registers its routes through its own framework, so only a handful are visible.
+
+## 5. Go
+
+The same checks on Go: deliberately vulnerable apps, then open-source ones.
+
+**A vulnerable `net/http` API** (in `tool/test/fixtures/go/nethttp`, standard library only) with seven
+planted bugs and a safe twin of the main one. The static scan found all seven and left the safe route
+alone. Run in Docker, `verify` with `--probe-rate-limits --probe-ssrf` confirmed every one of them:
+
+| Bug | Static | Runtime |
+|---|---|---|
+| Any user reads any order (`GET /api/orders/{id}`) | BOLA | CONFIRMED: the second user got the first user's order |
+| Password hash in `GET /api/me` | DATA_EXPOSURE | CONFIRMED: `passwordHash` in the answer |
+| Server fetches `?url=` | SSRF | CONFIRMED: the listener was called |
+| Origin echoed with credentials | CORS (HIGH) | CONFIRMED |
+| Stack trace on a malformed id | ERROR_LEAK | CONFIRMED: a goroutine trace in the answer |
+| Token signature never checked | (not visible statically) | CONFIRMED: an `alg: none` token was accepted |
+| `/dev/vars` left in | NON_PROD_ROUTE | CONFIRMED: answers anyone |
+| Login with no limiter | RATE_LIMIT | CONFIRMED: 20 wrong logins, none limited |
+
+**Vulnerable and example apps.** On OWASP crAPI's Go service, routeguard flags the coupon flows
+(business logic) and the post lookup by id. The Gin, Echo and Fiber RealWorld examples come out with
+their login rate limit and a few public lookups; the Gin one checks authorship before every edit, and
+routeguard agrees.
+
+**Open-source Go apps:**
+
+| App | Framework | Routes | HIGH | MEDIUM | LOW |
+|---|---|---|---|---|---|
+| [Gitea](https://github.com/go-gitea/gitea) | chi (own wrapper) | 1,222 | 5 | 16 | 178 |
+| [Mattermost](https://github.com/mattermost/mattermost) | gorilla/mux | 843 | 23 | 2 | 59 |
+| [Vikunja](https://github.com/go-vikunja/vikunja) | Echo | 202 | 9 | 3 | 16 |
+| [listmonk](https://github.com/knadh/listmonk) | Echo | 191 | 2 | 0 | 13 |
+| [PhotoPrism](https://github.com/photoprism/photoprism) | Gin | 183 | 1 | 0 | 51 |
+| [Woodpecker CI](https://github.com/woodpecker-ci/woodpecker) | Gin | 182 | 4 | 3 | 21 |
+| [Miniflux](https://github.com/miniflux/v2) | net/http | 179 | 0 | 5 | 3 |
+| [Gotify](https://github.com/gotify/server) | Gin | 46 | 2 | 1 | 6 |
+| [Gin RealWorld](https://github.com/gothinkster/golang-gin-realworld-example-app) | Gin | 27 | 0 | 1 | 3 |
+| [Echo RealWorld](https://github.com/xesina/golang-echo-realworld-example-app) | Echo | 20 | 0 | 2 | 3 |
+| [Fiber RealWorld](https://github.com/alpody/golang-fiber-realworld-example-app) | Fiber | 20 | 0 | 4 | 3 |
+| [ntfy](https://github.com/binwiederhier/ntfy) | net/http | 13 | 0 | 0 | 12 |
+| [OWASP crAPI](https://github.com/OWASP/crAPI) (community service) | gorilla/mux | 11 | 0 | 4 | 4 |
+| [memos](https://github.com/usememos/memos) | net/http (mostly gRPC) | 11 | 0 | 0 | 5 |
+
+| Finding | Verdict |
+|---|---|
+| Mattermost, Vikunja, Woodpecker: `/debug/pprof` and `/metrics` without a role check | Real while those listeners are reachable; most are behind a setting |
+| Mattermost: `GET /redirect_location` makes a HEAD request to a client URL | Mitigated: it runs only with link previews on, through an HTTP client built to refuse internal addresses |
+| Mattermost: `/system/e2e/*` test helpers | Real routes, disabled unless testing is switched on |
+| Gitea: Actions artifact routes and LFS verify reading by run or repo id | Arguable: a runner token or LFS token gates them, checked deeper than routeguard follows |
+| listmonk, Gotify: `config` routes with no role check | Arguable: per-user plugin or client config |
+| Miniflux: `GET /v1/feeds/{feedID}` returns the feed's basic-auth password | Real, low impact: the owner gets back the credentials they saved for that feed |
+| Woodpecker: a CLI helper that echoes any origin with credentials | Real code, but in the CLI's local login helper, not the server |
+
+Scanning all 14 Go apps (about 3,150 routes) takes about 30 seconds on a laptop. Routes behind a
+setting (`if setting.EnablePprof { ... }`) are reported LOW and say which setting.
+

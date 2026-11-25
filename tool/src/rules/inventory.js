@@ -22,7 +22,8 @@ export function inventory(routes, root) {
 	const byShape = new Map()
 	// only routes whose full path is known: a router mounted inside a function (mountMcp(app)) has no prefix here
 	// catch-alls (/{*any}, *) exist in most apps and are not copies of one endpoint
-	for (const r of routes.filter(r => r.anchored && !/[*]/.test(r.path))) {
+	// a path with an unresolved <part> could be anything, so it is not compared
+	for (const r of routes.filter(r => r.anchored && !/[*<]/.test(r.path))) {
 		if (!byShape.has(shape(r))) byShape.set(shape(r), [])
 		byShape.get(shape(r)).push(r)
 	}

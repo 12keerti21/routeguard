@@ -190,7 +190,8 @@ function candidates(routes, findings, allowWrites) {
 	const seen = new Set()
 	return routes.filter(r => {
 		const key = `${r.method} ${r.path}`
-		if (seen.has(key) || /[*<]/.test(r.path) || r.method === "ALL" || r.method === "OPTIONS" || r.method === "HEAD") return false
+		// ALL (a Go handler that takes any method) is replayed as a read only
+		if (seen.has(key) || /[*<]/.test(r.path) || r.method === "OPTIONS" || r.method === "HEAD" || (r.method === "ALL" && r.lang !== "go")) return false
 		if (WRITE.has(r.method) && !allowWrites) return false
 		const takesId = /[:{]/.test(r.path)
 		const operator = ["BFLA"].includes(flagged.get(key))
@@ -231,10 +232,11 @@ export async function verify({ routes, findings, baseUrl, config, allowWrites = 
 		}
 		const body = settings.bodies?.[key]
 		const url = prefix + path
+		const method = route.method === "ALL" ? "GET" : route.method
 		// the owner goes last for writes, so a delete by the other user is not hidden by the owner's own
-		const owner = WRITE.has(route.method) ? null : await call(baseUrl, route.method, url, headers.owner(route.method, url), body, timeoutMs)
-		const other = await call(baseUrl, route.method, url, headers.other(route.method, url), body, timeoutMs)
-		const anonymous = await call(baseUrl, route.method, url, {}, body, timeoutMs)
+		const owner = WRITE.has(method) ? null : await call(baseUrl, method, url, headers.owner(method, url), body, timeoutMs)
+		const other = await call(baseUrl, method, url, headers.other(method, url), body, timeoutMs)
+		const anonymous = await call(baseUrl, method, url, {}, body, timeoutMs)
 		answers.push({ route, url, owner, other, anonymous })
 		let verdict = judge(route, staticRule, owner, other, anonymous, url)
 		// an id the other user can also list may be theirs to read, so reading it proves nothing
