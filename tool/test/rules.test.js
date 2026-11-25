@@ -75,6 +75,24 @@ test("mass assignment passes picked fields", () => {
 	assert.equal(massAssignment(route("POST", "/api/users/invite")), null)
 })
 
+test("path-scoped app.use guards apply, and isAuthorized() is auth, not a role", () => {
+	const r = route("GET", "/rest/basket/:id")
+	assert.equal(r.auth, true)
+	assert.equal(r.role, false)
+})
+
+test("BOLA follows a handler factory and ignores identity read off the query path", () => {
+	assert.equal(bola(route("GET", "/rest/basket/:id"))?.rule, "BOLA")
+})
+
+test("BOLA passes a query scoped by an identity helper's result", () => {
+	assert.equal(bola(route("DELETE", "/rest/cards/:id")), null)
+})
+
+test("BOLA passes a handler that checks the role inline", () => {
+	assert.equal(bola(route("DELETE", "/rest/baskets/:id")), null)
+})
+
 test("no rule fires on the public list route", () => {
 	const r = route("GET", "/api/notes")
 	assert.deepEqual([bola(r), bfla(r), massAssignment(r)], [null, null, null])

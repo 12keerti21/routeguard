@@ -40,22 +40,35 @@ False positives: 0 across both targets.
 
 ## Real-world apps (false-positive check)
 
-Four popular open-source Express apps, run 2026-11-25. These are well-built, so a good result is few findings.
+Nine open-source Express apps, 438 routes, run 2026-11-25.
 
-| App | Routes mapped | Findings | Verdict |
+| App | Routes | Findings | Verdict |
 |---|---|---|---|
 | [hackathon-starter](https://github.com/sahat/hackathon-starter) | 101 | 0 | ✅ |
-| [node-express-boilerplate](https://github.com/hagopj13/node-express-boilerplate) | 15 | 0 | ✅ `auth('manageUsers')` read as a permission check |
-| [express-rest-boilerplate](https://github.com/danielfsousa/express-rest-boilerplate) | 15 | 2 LOW | ✅ fair: `new User(req.body)` behind `authorize(...)`, partly mitigated by `omit` |
-| [RealWorld example](https://github.com/gothinkster/node-express-realworld-example-app) (TS) | 20 | 0 | ✅ ownership passed to services via `req.auth.user.id` |
+| [node-express-boilerplate](https://github.com/hagopj13/node-express-boilerplate) | 15 | 0 | ✅ |
+| [express-rest-boilerplate](https://github.com/danielfsousa/express-rest-boilerplate) | 15 | 2 LOW | ✅ fair: `new User(req.body)` behind `authorize(...)` |
+| [RealWorld example](https://github.com/gothinkster/node-express-realworld-example-app) (TS) | 20 | 0 | ✅ |
+| [Uptime Kuma](https://github.com/louislam/uptime-kuma) | 59 | 1 LOW | ✅ `/metrics` behind an API key |
+| [Kutt](https://github.com/thedevs-network/kutt) | 63 | 1 LOW | ✅ admin creates users from the whole body |
+| [Etherpad](https://github.com/ether/etherpad-lite) (TS) | 35 | 2 LOW, 1 HIGH | ⚠️ LOWs are the public admin UI; HIGH is a public spec of the admin API (debatable) |
+| [bulletproof-nodejs](https://github.com/santiq/bulletproof-nodejs) (TS) | 6 | 0 | ✅ |
+| [OWASP Juice Shop](https://github.com/juice-shop/juice-shop) (TS, deliberately vulnerable) | 124 | 6 | see below |
 
-The first run, before fixes, mapped only 1 route in one app and raised 8 false positives. Fixes:
-- `router.route(path).get().post()` chains
-- controllers in other files, including `catchAsync(...)` wrappers
-- `lusca.xssProtection` matched "protect": an auth check is now matched on the name, not a substring
-- `passport.session()` and `auth.optional` no longer count as auth
-- `auth('perm')` counts as a permission check
-- `/reset/:token`: a secret in the URL is its own authorisation
+**Juice Shop**, where real bugs are expected:
+- ✅ `GET /rest/basket/:id`: the known "View Basket" BOLA challenge
+- ✅ `GET /metrics`: the known "Exposed Metrics" challenge
+- ✅ `PUT /api/BasketItems/:id`: the item is fetched by id alone; the caller is read only for a challenge check
+- ⚠️ `GET /rest/admin/application-configuration` and `/application-version`: public by design, but they expose config under an admin path
+
+**False positives fixed along the way** (each now has a test):
+- `router.route(path).get().post()` chains, controllers in other files, `catchAsync(...)` wrappers, handler factories (`asyncHandler(retrieveBasket())`)
+- auth matched on the function's own name: `lusca.xssProtection`, `auth.featureAccess`, `helpers.verify`, `verify.jwtChallenges()` and `updateAuthenticatedUsers()` are not auth checks; `asyncHandler(auth.jwt)` and `auth.required` are
+- `passport.session()` and `auth.optional` don't enforce anything
+- `isAuthorized()` means signed in; `authorize(ADMIN)`, `auth('manageUsers')` and `isAccounting()` are role checks
+- path-scoped guards: `app.use('/rest/basket', isAuthorized())`
+- caller identity from `const { user } = req`, helpers like `authenticatedUsers.from(req)`, and `appendUserId()` middleware
+- BOLA needs the caller in the query or an `if`, not just read somewhere
+- role checks inside the handler (`requireAdmin(req, res)`), a secret in the URL (`/reset/:token`) or in the body (a link password)
 
 ## Next
 
