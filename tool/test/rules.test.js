@@ -11,6 +11,8 @@ import { rateLimit } from "../src/rules/rateLimit.js"
 import { dataExposure } from "../src/rules/dataExposure.js"
 import { misconfig } from "../src/rules/misconfig.js"
 import { inventory } from "../src/rules/inventory.js"
+import { businessFlow } from "../src/rules/businessFlow.js"
+import { consumption } from "../src/rules/consumption.js"
 
 const app = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures/app")
 const routes = mapRoutes(app)
@@ -199,7 +201,46 @@ test("inventory lists routes the OpenAPI spec leaves out, not the ones it docume
 	assert.ok(!undocumented.includes("GET /api/notes/:id"))
 })
 
+test("business flow flags an unguarded checkout as MEDIUM", () => {
+	assert.equal(businessFlow(route("POST", "/int/checkout"))?.severity, "MEDIUM")
+})
+
+test("business flow passes a limited redemption, a catalogue and a token-gated invite", () => {
+	assert.equal(businessFlow(route("POST", "/int/redeem")), null)
+	assert.equal(businessFlow(route("POST", "/int/books")), null)
+	assert.equal(businessFlow(route("POST", "/int/invites/:token/accept")), null)
+})
+
+const consumed = consumption(app).filter(f => f.where.startsWith("lib/weather.js"))
+const consumedLines = rule => consumed.filter(f => f.rule === rule).map(f => Number(f.where.split(":")[1]))
+
+test("consumption flags an unchecked store, eval of a response and plain http to a partner", () => {
+	const unsafe = consumed.filter(f => f.rule === "UNSAFE_CONSUMPTION")
+	assert.ok(unsafe.some(f => f.severity === "MEDIUM" && f.where.endsWith(":7")))
+	assert.ok(unsafe.some(f => f.severity === "HIGH" && /eval/.test(f.message)))
+	assert.ok(unsafe.some(f => f.severity === "LOW" && /partner\.example\.com/.test(f.message)))
+})
+
+test("consumption passes a validated store and local http", () => {
+	assert.ok(!consumedLines("UNSAFE_CONSUMPTION").includes(14))
+	assert.ok(!consumed.some(f => /localhost/.test(f.message)))
+})
+
+test("consumption flags an API key written into a URL", () => {
+	assert.deepEqual(consumedLines("SECRET_IN_URL"), [6])
+})
+
+test("a validator named after login is not an auth check", () => {
+	assert.equal(route("POST", "/int/signin").auth, false)
+	assert.equal(rateLimit(route("POST", "/int/signin"))?.rule, "RATE_LIMIT")
+})
+
+test("a limiter imported by name and mounted on a path in another file covers the route", () => {
+	assert.ok(route("POST", "/int/limited/login").middleware.includes("authLimiter"))
+	assert.equal(rateLimit(route("POST", "/int/limited/login")), null)
+})
+
 test("no rule fires on the public list route", () => {
 	const r = route("GET", "/api/notes")
-	assert.deepEqual([bola(r), bfla(r), massAssignment(r), ssrf(r), rateLimit(r), dataExposure(r)], [null, null, null, null, null, null])
+	assert.deepEqual([bola, bfla, massAssignment, ssrf, rateLimit, dataExposure, businessFlow].map(rule => rule(r)), Array(7).fill(null))
 })

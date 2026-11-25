@@ -64,6 +64,21 @@ Real apps: only LOW CORS and header notes, no HIGH. Noise removed on the way: CO
 per function (Uptime Kuma's `allowAllOrigin` sends no credentials), shadows compare only routes whose
 full path is known, and a partial spec (Juice Shop's B2B swagger) is checked under its own base path.
 
+## Business flows and API consumption (v0.8)
+
+| Target | Ground truth | Our tool |
+|---|---|---|
+| APIGOAT API6 `POST /bookings` | API6 unrestricted business flow | ✅ BUSINESS_FLOW LOW |
+| APIGOAT API10 `/weather` | API10: the provider's answer is relayed as is | ✅ UNSAFE_CONSUMPTION LOW |
+| APIGOAT API10 `appid=2ee846af…` in the URL | not listed: an API key in the code | ✅ SECRET_IN_URL HIGH |
+| Juice Shop `PUT /rest/basket/:id/coupon/:coupon` | known Forged Coupon challenge | ✅ BUSINESS_FLOW MEDIUM |
+| hackathon-starter Steam profile call | not a planted bug: `http://` with the API key in the query | ✅ UNSAFE_CONSUMPTION LOW |
+
+Noise removed: flows match whole path segments ("books" and "facebook" are not bookings,
+"tokenTransfer" is not money), `robots()` is not anti-automation, a token in the path gates a flow,
+third-party data is tracked per function (two functions' `message` never mix), and a value that
+went through `schema.parse()` counts as validated.
+
 ## Real-world apps (false-positive check)
 
 Nine open-source Express apps, 438 routes, run 2026-11-25.

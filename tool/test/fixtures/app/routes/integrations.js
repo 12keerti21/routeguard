@@ -46,4 +46,22 @@ router.get("/people/:id/card", auth, async (req, res) => {
 	res.json(user)
 })
 
+// API6: a checkout with nothing against bots
+router.post("/checkout", auth, async (req, res) => res.end())
+
+// safe: redemption is limited
+router.post("/redeem", auth, rateLimit({ max: 3 }), async (req, res) => res.end())
+
+// safe: a catalogue, not a flow
+router.post("/books", auth, async (req, res) => res.end())
+
+// safe: the token gates it
+router.post("/invites/:token/accept", async (req, res) => res.end())
+
+// validate(schemas.login) validates; it is not a login check
+router.post("/signin", validate(schemas.login), async (req, res) => res.end())
+
+// limited by app.use("/int/limited", authLimiter) in index.js
+router.post("/limited/login", async (req, res) => res.end())
+
 module.exports = router
