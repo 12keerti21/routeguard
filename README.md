@@ -89,6 +89,30 @@ npx routeguard-cli verify ./my-api --base-url http://localhost:3000 --config ver
 - Reads only by default. `--allow-writes` also replays PUT, PATCH, DELETE and POST: use a disposable
   test environment.
 
+**Logins with several steps, one-time codes and DPoP.** A user's `login` can be a list of steps: each
+can `save` values from its answer for the next step (`{{name}}`), and `{{prompt:label}}` asks for a
+value such as an emailed code when the run reaches it. Set `"dpop": true` for apps that bind tokens to a
+client key (RFC 9449): routeguard keeps a key per user and signs a fresh proof for every request.
+`dpopOrigin` is the origin the app expects in the proof, when it differs from `--base-url`.
+
+```json
+{
+  "dpopOrigin": "http://localhost:5173",
+  "users": {
+    "owner": {
+      "dpop": true,
+      "login": [
+        { "path": "/api/v1/auth/login", "body": { "email": "alice@test.local", "password": "${ALICE_PASSWORD}" }, "save": { "lt": "login_token" } },
+        { "path": "/api/v1/auth/login/verify", "body": { "login_token": "{{lt}}", "otp": "{{prompt:Code emailed to Alice}}" }, "token": "access_token" }
+      ]
+    }
+  }
+}
+```
+
+Prompts read from the terminal, or one answer per line from standard input when another program runs
+the check. Two users getting the same *empty* answer is reported as inconclusive, not as a leak.
+
 ### In GitHub Actions
 
 ```yaml
