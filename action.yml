@@ -1,4 +1,4 @@
-name: routeguard
+name: routeguard API authorisation scan
 description: Map Express and Go API routes to their auth checks and flag OWASP API Top 10 authorisation risks
 branding:
   icon: shield

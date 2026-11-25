@@ -163,7 +163,7 @@ jobs:
         with:
           node-version: 20
       - id: routeguard
-        uses: 12keerti21/routeguard@v1
+        uses: 12keerti21/routeguard@v2
         with:
           path: .
           fail-on: HIGH
