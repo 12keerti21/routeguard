@@ -17,7 +17,7 @@ const route = (method, routePath) => {
 }
 
 test("mapper joins mount prefixes and finds every route", () => {
-	assert.equal(routes.filter(r => r.path.startsWith("/api/notes")).length, 6)
+	assert.equal(routes.filter(r => r.path.startsWith("/api/notes")).length, 7)
 	assert.equal(routes.filter(r => r.path.startsWith("/api/users")).length, 4)
 })
 
@@ -91,6 +91,10 @@ test("BOLA passes a query scoped by an identity helper's result", () => {
 
 test("BOLA passes a handler that checks the role inline", () => {
 	assert.equal(bola(route("DELETE", "/rest/baskets/:id")), null)
+})
+
+test("handlers imported through package.json subpath imports are read", () => {
+	assert.equal(bola(route("GET", "/api/notes/reports/:id"))?.rule, "BOLA")
 })
 
 test("no rule fires on the public list route", () => {

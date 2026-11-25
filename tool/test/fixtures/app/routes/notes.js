@@ -3,6 +3,7 @@ const router = express.Router()
 const auth = require("../middleware/auth")
 const admin = require("../middleware/admin")
 const Note = require("../models/note")
+const { getReport } = require("#lib/reports.js")
 
 // BOLA: any signed-in user reads any note
 router.get("/:id", auth, async (req, res) => {
@@ -34,5 +35,7 @@ router.post("/", auth, async (req, res) => {
 router.get("/", async (req, res) => {
 	res.send(await Note.find())
 })
+
+router.get("/reports/:id", auth, getReport)
 
 module.exports = router
