@@ -14,7 +14,8 @@ Exit code 2 when there are findings.
 ## Status
 
 - Route mapper: Express `app`/`router` routes, nested mounts, `router.use` middleware
-- Rules: BOLA (API1), BFLA (API5)
+- Rules: BOLA (API1), BFLA (API5), mass assignment (API3)
+- Tests: `npm test` (fixture app with vulnerable and safe routes)
 - Benchmark against Semgrep and Bearer: [benchmark.md](benchmark.md)
 
 Test targets go in `labs/` (ignored): VAmPI, APIGOAT, vulnerable-rest-api.

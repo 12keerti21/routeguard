@@ -3,8 +3,9 @@ import path from "node:path"
 import { mapRoutes } from "../src/mapper.js"
 import { bola } from "../src/rules/bola.js"
 import { bfla } from "../src/rules/bfla.js"
+import { massAssignment } from "../src/rules/massAssignment.js"
 
-const RULES = [bola, bfla]
+const RULES = [bola, bfla, massAssignment]
 
 const args = process.argv.slice(2)
 const json = args.includes("--json")
