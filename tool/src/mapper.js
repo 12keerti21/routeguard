@@ -34,7 +34,7 @@ export function listSourceFiles(root) {
 	return files
 }
 
-function parseFile(file) {
+export function parseFile(file) {
 	try {
 		return parse(readFileSync(file, "utf8"), {
 			sourceType: "unambiguous",
@@ -168,6 +168,9 @@ function scanFile(file) {
 		routes: [],
 		uses: [],
 		pathUses: [],
+		// module.exports = router / export default router: which router a plain import gets
+		defaultExport: null,
+		createsApp: false,
 		functions: new Map()
 	}
 	if (!ast) return result
@@ -196,6 +199,13 @@ function scanFile(file) {
 			const fn = unwrapHandler(node.init)
 			if (isFunctionNode(fn)) result.functions.set(node.id.name, fn)
 		}
+		if (node.type === "AssignmentExpression" && nameOf(node.left) === "module.exports" && node.right.type === "Identifier")
+			result.defaultExport = node.right.name
+		if (node.type === "ExportDefaultDeclaration")
+			result.defaultExport = node.declaration.type === "Identifier" ? node.declaration.name : isCallNode(node.declaration) ? chainRoot(node.declaration) : null
+		if (isCallNode(node) && (node.callee.name === "express" || (isMemberNode(node.callee) && node.callee.property.name === "listen")))
+			result.createsApp = true
+
 		// exports.getBook = () => {} and module.exports.getBook = () => {}
 		if (node.type === "AssignmentExpression" && isMemberNode(node.left) && /^(module\.)?exports\./.test(nameOf(node.left))) {
 			const fn = unwrapHandler(node.right)
@@ -335,6 +345,16 @@ export function mapRoutes(root) {
 	const byFile = new Map(scans.map(s => [s.file, s]))
 	const isRouterFile = file => byFile.get(file)?.routes.length > 0 || byFile.get(file)?.mounts.length > 0
 
+	// which router object an identifier imports: users → "routes/users.js#router", { learnerRouter } → "…#learnerRouter".
+	// "*" when the file's default export is not a plain name, so the mount applies to every router in it
+	function mountKey(scan, ident) {
+		const file = scan.requires.get(ident)
+		if (file && byFile.has(file)) return { file, key: `${file}#${byFile.get(file).defaultExport ?? "*"}` }
+		const named = scan.named.get(ident)
+		if (named && byFile.has(named.file)) return { file: named.file, key: `${named.file}#${named.name}` }
+		return null
+	}
+
 	// who mounts each file, with what prefix and mount-level middleware
 	const mountedBy = new Map()
 	const addMount = (target, mount) => {
@@ -343,17 +363,17 @@ export function mapRoutes(root) {
 	}
 	for (const scan of scans) {
 		for (const mount of scan.mounts) {
-			const target = scan.requires.get(mount.target)
-			if (target && byFile.has(target)) addMount(target, { parent: scan.file, ...mount })
+			const target = mount.target && mountKey(scan, mount.target)
+			if (target) addMount(target.key, { parent: scan.file, ...mount })
 			// app.use("/api", api) where api is a router built in this file
 			else if (mount.target && !scan.requires.has(mount.target) && !scan.named.has(mount.target) && !scan.functions.has(mount.target))
 				scan.localMounts.set(mount.target, mount)
 			else scan.pathUses.push({ owner: mount.owner, prefix: mount.prefix, middleware: mount.allMiddleware, line: mount.line })
 		}
 		for (const use of scan.uses) {
-			const routers = use.idents.filter(id => isRouterFile(scan.requires.get(id)))
+			const routers = use.idents.filter(id => isRouterFile(mountKey(scan, id)?.file))
 			for (const id of routers)
-				addMount(scan.requires.get(id), { parent: scan.file, owner: use.owner, prefix: "", middleware: [], line: use.line })
+				addMount(mountKey(scan, id).key, { parent: scan.file, owner: use.owner, prefix: "", middleware: [], line: use.line })
 			// a mounted router is not middleware: authController must not count as an auth check
 			use.middleware = use.middleware.filter(m => !routers.includes(m))
 		}
@@ -362,24 +382,31 @@ export function mapRoutes(root) {
 	// the prefix a router built in this file sits under: api → "/api" when app.use("/api", api)
 	function localContext(scan, owner, seen = new Set()) {
 		const mount = scan.localMounts.get(owner)
-		if (!mount || seen.has(owner)) return { prefix: "", middleware: [] }
+		if (!mount || seen.has(owner)) return { prefix: "", middleware: [], owner }
 		seen.add(owner)
 		const outer = localContext(scan, mount.owner, seen)
 		return {
 			prefix: joinPath(outer.prefix, mount.prefix),
-			middleware: [...outer.middleware, ...inheritedUses(scan, mount.owner, mount.line), ...mount.middleware]
+			middleware: [...outer.middleware, ...inheritedUses(scan, mount.owner, mount.line), ...mount.middleware],
+			owner: outer.owner
 		}
 	}
 
-	// a file can be mounted at several prefixes, through nested routers
-	function contexts(file, seen = new Set()) {
-		const parents = mountedBy.get(file)
-		if (!parents || seen.has(file)) return [{ prefix: "", middleware: [] }]
-		seen.add(file)
-		return parents.flatMap(m =>
-			contexts(m.parent, new Set(seen)).map(ctx => {
-				const local = localContext(byFile.get(m.parent), m.owner)
+	// a router can be mounted at several prefixes, through nested routers. anchored: the chain
+	// reaches a file that creates the app, so the full path is known
+	function contexts(file, owner, seen = new Set()) {
+		const key = `${file}#${owner}`
+		const parents = [...(mountedBy.get(key) ?? []), ...(mountedBy.get(`${file}#*`) ?? [])]
+		// a root is known when it creates the app or assembles other routers (startup/routes.js);
+		// a router built in a factory and mounted by call has no known prefix
+		const root = byFile.get(file)
+		if (parents.length === 0 || seen.has(key)) return [{ prefix: "", middleware: [], anchored: Boolean(root?.createsApp || root?.mounts.length) }]
+		seen.add(key)
+		return parents.flatMap(m => {
+			const local = localContext(byFile.get(m.parent), m.owner)
+			return contexts(m.parent, local.owner, new Set(seen)).map(ctx => {
 				return {
+					anchored: ctx.anchored,
 					prefix: joinPath(joinPath(ctx.prefix, local.prefix), m.prefix),
 					middleware: [
 						...ctx.middleware,
@@ -389,7 +416,7 @@ export function mapRoutes(root) {
 					]
 				}
 			})
-		)
+		})
 	}
 
 	// router.use(auth) applies to routes registered after it on the same object
@@ -411,7 +438,7 @@ export function mapRoutes(root) {
 
 	// app.use("/v1/auth", authLimiter) in app.js covers routes defined in routes/auth.route.js
 	const outerPathUses = scans.flatMap(scan =>
-		scan.pathUses.flatMap(u => contexts(scan.file).map(ctx => ({ file: scan.file, prefix: joinPath(ctx.prefix, u.prefix), middleware: u.middleware })))
+		scan.pathUses.flatMap(u => contexts(scan.file, localContext(scan, u.owner).owner).map(ctx => ({ file: scan.file, prefix: joinPath(ctx.prefix, u.prefix), middleware: u.middleware })))
 	)
 	const crossFileUses = (file, fullPath) =>
 		outerPathUses.filter(u => u.file !== file && covers(u.prefix, fullPath)).flatMap(u => u.middleware)
@@ -461,8 +488,8 @@ export function mapRoutes(root) {
 	for (const scan of scans) {
 		for (const route of scan.routes) {
 			const handler = resolveHandler(scan, route.handlerNode)
-			for (const ctx of contexts(scan.file)) {
-				const local = localContext(scan, route.owner)
+			const local = localContext(scan, route.owner)
+			for (const ctx of contexts(scan.file, local.owner)) {
 				const middleware = [
 					...ctx.middleware,
 					...local.middleware,
@@ -489,6 +516,7 @@ export function mapRoutes(root) {
 				Object.defineProperty(entry, "resolve", { value: resolveCallee })
 				Object.defineProperty(entry, "importedFile", { value: importedFile })
 				Object.defineProperty(entry, "root", { value: root })
+				Object.defineProperty(entry, "anchored", { value: ctx.anchored })
 				Object.defineProperty(entry, "ignored", { value: ignoredRules(scan.file, route.line) })
 				routes.push(entry)
 			}

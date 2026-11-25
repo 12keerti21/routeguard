@@ -9,6 +9,8 @@ import { massAssignment } from "../src/rules/massAssignment.js"
 import { ssrf } from "../src/rules/ssrf.js"
 import { rateLimit } from "../src/rules/rateLimit.js"
 import { dataExposure } from "../src/rules/dataExposure.js"
+import { misconfig } from "../src/rules/misconfig.js"
+import { inventory } from "../src/rules/inventory.js"
 
 const RULES = [bola, bfla, massAssignment, dataExposure, ssrf, rateLimit]
 
@@ -34,9 +36,13 @@ const routes = mapRoutes(path.resolve(target))
 const suppressed = (route, finding) => route.ignored === "all" || route.ignored?.has(finding.rule)
 // a router mounted twice reports the same code twice
 const seen = new Set()
-const findings = routes
-	.flatMap(r => RULES.map(rule => rule(r)).filter(f => f && !suppressed(r, f)))
-	.filter(f => !seen.has(`${f.rule} ${f.route} ${f.where}`) && seen.add(`${f.rule} ${f.route} ${f.where}`))
+const root = path.resolve(target)
+const findings = [
+	...routes.flatMap(r => RULES.map(rule => rule(r)).filter(f => f && !suppressed(r, f))),
+	// checks that look at the app as a whole, not one route
+	...inventory(routes, root),
+	...misconfig(root)
+].filter(f => !seen.has(`${f.rule} ${f.route} ${f.where}`) && seen.add(`${f.rule} ${f.route} ${f.where}`))
 
 const exitCode = findings.some(f => SEVERITIES.indexOf(f.severity) >= SEVERITIES.indexOf(failOn)) ? 2 : 0
 

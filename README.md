@@ -48,6 +48,11 @@ Findings then show in the PR and under Security → Code scanning.
 - Route mapper: Express `app`/`router` routes, nested mounts, `router.use` middleware
 - Rules: BOLA (API1), BFLA (API5), mass assignment and excessive data exposure (API3),
   missing rate limits on login, OTP and reset flows (API4/API2), SSRF (API7)
+- App-wide: CORS that reflects any origin with credentials, JWT algorithm confusion, `alg: none`,
+  ignored expiry and keys in the code (API2), stack traces and raw errors in responses, missing
+  security headers (API8), shadow copies of an endpoint with weaker auth, dev/beta/old routes and
+  routes missing from the OpenAPI spec (API9)
+- Mounts are tracked per router object, so a file exporting several routers gets each one's prefix
 - BOLA follows the URL id from the handler into the services it calls (up to 4 calls deep) and
   needs the caller to limit it on the way: in the query, in a guard that compares the caller with
   the record, or in a check call such as `canUpdate(user, course)`
