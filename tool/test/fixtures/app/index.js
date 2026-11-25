@@ -8,6 +8,7 @@ const integrations = require("./routes/integrations")
 const legacy = require("./routes/legacy")
 const { authLimiter } = require("./middleware/limits")
 const history = require("./routes/history")
+const ts = require("./ts/index.js")
 const { PREFIX } = require("./lib/endpoints")
 
 const app = express()
@@ -21,6 +22,7 @@ app.use("/int/limited", authLimiter)
 app.use("/int", integrations)
 app.use("/api/v1", legacy)
 app.use(`${PREFIX}/me`, history)
+app.use("/ts", ts)
 
 // a router built here and mounted under a prefix
 const v2 = express.Router().use(users)

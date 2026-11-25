@@ -64,4 +64,10 @@ router.post("/signin", validate(schemas.login), async (req, res) => res.end())
 // limited by app.use("/int/limited", authLimiter) in index.js
 router.post("/limited/login", async (req, res) => res.end())
 
+// a step in a bank's OAuth flow, not a password check
+router.post("/start-auth", auth, async (req, res) => res.end())
+
+// an admin login
+router.post("/adminAuth", async (req, res) => res.end())
+
 module.exports = router

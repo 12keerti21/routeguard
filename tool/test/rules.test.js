@@ -255,6 +255,29 @@ test("rate limit splits words: flushProjectToTpds holds no otp", () => {
 	assert.equal(rateLimit(route("POST", "/api/v3/me/admin/flushProjectToTpds")), null)
 })
 
+test("TypeScript imports written as ./x.js resolve to x.ts, keeping prefixes and middleware", () => {
+	const r = route("GET", "/ts/orders/:orderId")
+	assert.equal(r.auth, true)
+	assert.equal(bola(r)?.rule, "BOLA")
+})
+
+test("an admin check inside a wrapped inline middleware counts as a role check", () => {
+	assert.equal(bfla(route("GET", "/ts/orders/metrics")), null)
+})
+
+test("a parameter that names no record (:provider) is not an object-level target", () => {
+	assert.equal(bola(route("POST", "/ts/orders/webhooks/:provider")), null)
+})
+
+test("an HTTP client call with a data body is not mistaken for a route", () => {
+	assert.ok(!routes.some(r => r.path.endsWith("/graphql/system")))
+})
+
+test("rate limits: an admin login counts, a step in someone else's OAuth flow does not", () => {
+	assert.equal(rateLimit(route("POST", "/int/adminAuth"))?.rule, "RATE_LIMIT")
+	assert.equal(rateLimit(route("POST", "/int/start-auth")), null)
+})
+
 test("no rule fires on the public list route", () => {
 	const r = route("GET", "/api/notes")
 	assert.deepEqual([bola, bfla, massAssignment, ssrf, rateLimit, dataExposure, businessFlow].map(rule => rule(r)), Array(7).fill(null))
