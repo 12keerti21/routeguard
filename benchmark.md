@@ -55,7 +55,21 @@ Bugs routeguard also found that the projects do not list:
 - APIGOAT: an API key written into a URL.
 - Juice Shop: checking out another user's basket, and editing another user's basket items.
 
-## 3. Noise on real applications
+## 3. Static findings confirmed at runtime
+
+`routeguard verify` against a live OWASP Juice Shop (Docker), with two ordinary customer accounts:
+
+| Route | Verdict |
+|---|---|
+| `GET /rest/basket/:id` | CONFIRMED: the second user reads the first user's basket (static BOLA finding confirmed) |
+| `GET /api/Users/:id` | CONFIRMED: the second user reads the first user's account (missed by static analysis: generic handler) |
+| `GET /metrics`, `/rest/admin/application-configuration`, `/rest/admin/application-version` | CONFIRMED: reachable with no credentials (static BFLA findings confirmed) |
+| `GET /api/Addresss/:id`, `GET /api/Cards/:id` | PROTECTED: the second user is refused (static analysis agreed) |
+| Product reviews, delivery methods, order tracking, recycling | PUBLIC: open by design |
+
+Fourteen routes replayed, including the static scan, in under a second.
+
+## 4. Noise on real applications
 
 Fourteen open-source Express apps, most of them well maintained. A good result here is few findings,
 and HIGH findings that hold up when read by hand.
