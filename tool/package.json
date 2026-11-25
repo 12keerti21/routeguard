@@ -7,7 +7,8 @@
     "routeguard": "bin/cli.js"
   },
   "scripts": {
-    "map": "node bin/cli.js"
+    "map": "node bin/cli.js",
+    "test": "node --test test/*.test.js"
   },
   "engines": {
     "node": ">=20"
