@@ -190,8 +190,8 @@ test("inventory flags a v1 copy of an endpoint that drops its auth", () => {
 	assert.equal(shadow?.route, "GET /api/v1/notes/:id")
 })
 
-test("inventory flags a beta endpoint", () => {
-	assert.ok(inventoried.some(f => f.rule === "NON_PROD_ROUTE" && f.route === "GET /api/v1/beta/search"))
+test("inventory flags a development endpoint", () => {
+	assert.ok(inventoried.some(f => f.rule === "NON_PROD_ROUTE" && f.route === "GET /api/v1/dev/search"))
 })
 
 test("inventory lists routes the OpenAPI spec leaves out, not the ones it documents", () => {
@@ -238,6 +238,21 @@ test("a validator named after login is not an auth check", () => {
 test("a limiter imported by name and mounted on a path in another file covers the route", () => {
 	assert.ok(route("POST", "/int/limited/login").middleware.includes("authLimiter"))
 	assert.equal(rateLimit(route("POST", "/int/limited/login")), null)
+})
+
+test("paths written as constants resolve, through a template prefix and an exported object", () => {
+	assert.ok(route("PUT", "/api/v3/me/history/:noteId"))
+	assert.ok(route("POST", "/api/v3/me/admin/flushProjectToTpds"))
+})
+
+test("a controller written as an object method is read, and an id used inside the caller's data is scoped", () => {
+	const r = route("PUT", "/api/v3/me/history/:noteId")
+	assert.ok(r.fn)
+	assert.equal(bola(r), null)
+})
+
+test("rate limit splits words: flushProjectToTpds holds no otp", () => {
+	assert.equal(rateLimit(route("POST", "/api/v3/me/admin/flushProjectToTpds")), null)
 })
 
 test("no rule fires on the public list route", () => {

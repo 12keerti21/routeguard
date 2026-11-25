@@ -7,6 +7,8 @@ const courses = require("./routes/courses")
 const integrations = require("./routes/integrations")
 const legacy = require("./routes/legacy")
 const { authLimiter } = require("./middleware/limits")
+const history = require("./routes/history")
+const { PREFIX } = require("./lib/endpoints")
 
 const app = express()
 app.use(express.json())
@@ -18,6 +20,7 @@ app.use("/api/courses", courses)
 app.use("/int/limited", authLimiter)
 app.use("/int", integrations)
 app.use("/api/v1", legacy)
+app.use(`${PREFIX}/me`, history)
 
 // a router built here and mounted under a prefix
 const v2 = express.Router().use(users)

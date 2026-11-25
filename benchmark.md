@@ -79,6 +79,48 @@ Noise removed: flows match whole path segments ("books" and "facebook" are not b
 third-party data is tracked per function (two functions' `message` never mix), and a value that
 went through `schema.parse()` counts as validated.
 
+## Round 2: five large production apps (v0.9)
+
+[Ghost](https://github.com/TryGhost/Ghost), [Overleaf](https://github.com/overleaf/overleaf),
+[Verdaccio](https://github.com/verdaccio/verdaccio), [mongo-express](https://github.com/mongo-express/mongo-express)
+and [HedgeDoc 1.x](https://github.com/hedgedoc/hedgedoc): 983 routes, scanned in about 10 seconds in all.
+
+| | First run | After fixes |
+|---|---|---|
+| Verdaccio routes mapped | 8 | 55 (paths are enum constants in another workspace package) |
+| Findings, all five apps | 82 | 33 |
+| HIGH | 27 | 2 |
+| MEDIUM | 28 | 5 |
+
+What was left after the fixes, read by hand:
+- HIGH, Overleaf `GET /debug/events` (real-time service) and `GET /metrics` (metrics library): real, unauthenticated
+  debug and metrics endpoints on internal services. Safe only while those services stay off the public network.
+- MEDIUM, Overleaf `/launchpad/register_admin` (and LDAP and SAML variants): no limiter on first-admin setup. Low risk,
+  since it works once.
+- MEDIUM, Overleaf `GET /dev/csrf`: a health check under `/dev` that hands out a CSRF token. By design.
+- MEDIUM, HedgeDoc: redirects to the URL GitHub's gist API returns. Fair, though GitHub is a trusted provider.
+- No clear false positives left at HIGH or MEDIUM. LOWs (security headers, CORS notes, raw errors) were not
+  reviewed one by one.
+
+False positives found and fixed (each now has a test):
+- test and vendored code scanned: Ghost's `e2e/` fake Stripe and Mailgun servers, `.yarn/releases/*.cjs` (hidden
+  folders, test and mock folders, and files over 512 KB are skipped now)
+- route paths as constants: `router.get(STAGE_API_ENDPOINTS.list)` from an `enum` in another workspace package,
+  `` `${PREFIX}/users` ``, `Object.freeze({...})`, `export * from` (unresolvable ones stay visible as `<NAME>`)
+- `requireGroupMemberManagement('group')`, `ensureProjectAccess`: role checks named for the right they check
+- words, not substrings: `flushProjectToTpds` holds no "otp", and `adminAuth` is a login (a new true positive in
+  vulnerable-rest-api)
+- `/stage`, `/temp`, `/flush/old` and `/login/legacy` are feature names; only `dev`, `test`, `staging`, `sandbox` and
+  `deprecated` near the top of a path count as non-production
+- `key` in a path is an identifier (`/key/:key`, npm's public `/keys`), not a secret
+- `/labels/transfer` is not money; a transfer needs a wallet, fund, balance or payment word next to it
+- admin-only flows are not bot targets
+- `getHistory(req.user.id, (err, history) => …)`: the callback's result is the caller's, and `history[noteId]` picks
+  inside it
+- controllers written as object methods (`const C = { getMessages(req, res) {…} }`)
+- shadow routes are compared only within one app of a monorepo, and not for catch-alls
+- `/-/v1/login_cli/:sessionId`: a session id in the URL is its own key
+
 ## Real-world apps (false-positive check)
 
 Nine open-source Express apps, 438 routes, run 2026-11-25.
