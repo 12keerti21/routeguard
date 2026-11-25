@@ -57,8 +57,6 @@ The first run, before fixes, mapped only 1 route in one app and raised 8 false p
 - `auth('perm')` counts as a permission check
 - `/reset/:token`: a secret in the URL is its own authorisation
 
-Known gap: a router mounted on an inline `Router().use('/api', api)` loses its `/api` prefix.
-
 ## Next
 
 - [ ] Repeat on crAPI (multi-service, more realistic)

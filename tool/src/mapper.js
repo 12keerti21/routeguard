@@ -114,17 +114,37 @@ function routeChainPath(object) {
 }
 
 // Router().use(a).use(b) and router.route("/x").get(…): the object at the root of the chain
-function chainRoot(object) {
+function chainRootNode(object) {
 	let node = object
 	while (isCallNode(node) && isMemberNode(node.callee) && /^(use|route|get|post|put|patch|delete|all)$/.test(node.callee.property.name))
 		node = node.callee.object
-	return nameOf(node)
+	return node
 }
 
 function scanFile(file) {
 	const ast = parseFile(file)
-	const result = { file, requires: new Map(), named: new Map(), mounts: [], routes: [], uses: [], functions: new Map() }
+	const result = {
+		file,
+		requires: new Map(),
+		named: new Map(),
+		mounts: [],
+		localMounts: new Map(),
+		routes: [],
+		uses: [],
+		functions: new Map()
+	}
 	if (!ast) return result
+
+	// const api = Router().use(a).use(b): calls on that chain belong to "api", not to "Router()"
+	const chainOwners = new Map()
+	walk(ast, node => {
+		if (node.type === "VariableDeclarator" && node.id.type === "Identifier" && isCallNode(node.init))
+			chainOwners.set(chainRootNode(node.init), node.id.name)
+	})
+	const chainRoot = object => {
+		const root = chainRootNode(object)
+		return chainOwners.get(root) ?? nameOf(root)
+	}
 
 	walk(ast, node => {
 		// named handlers: function getBook() {}, const getBook = () => {}, const getBook = catchAsync(() => {})
@@ -228,6 +248,8 @@ export function mapRoutes(root) {
 		for (const mount of scan.mounts) {
 			const target = scan.requires.get(mount.target)
 			if (target && byFile.has(target)) addMount(target, { parent: scan.file, ...mount })
+			// app.use("/api", api) where api is a router built in this file
+			else if (mount.target) scan.localMounts.set(mount.target, mount)
 		}
 		for (const use of scan.uses) {
 			const routers = use.idents.filter(id => isRouterFile(scan.requires.get(id)))
@@ -238,16 +260,36 @@ export function mapRoutes(root) {
 		}
 	}
 
+	// the prefix a router built in this file sits under: api → "/api" when app.use("/api", api)
+	function localContext(scan, owner, seen = new Set()) {
+		const mount = scan.localMounts.get(owner)
+		if (!mount || seen.has(owner)) return { prefix: "", middleware: [] }
+		seen.add(owner)
+		const outer = localContext(scan, mount.owner, seen)
+		return {
+			prefix: joinPath(outer.prefix, mount.prefix),
+			middleware: [...outer.middleware, ...inheritedUses(scan, mount.owner, mount.line), ...mount.middleware]
+		}
+	}
+
 	// a file can be mounted at several prefixes, through nested routers
 	function contexts(file, seen = new Set()) {
 		const parents = mountedBy.get(file)
 		if (!parents || seen.has(file)) return [{ prefix: "", middleware: [] }]
 		seen.add(file)
 		return parents.flatMap(m =>
-			contexts(m.parent, new Set(seen)).map(ctx => ({
-				prefix: joinPath(ctx.prefix, m.prefix),
-				middleware: [...ctx.middleware, ...inheritedUses(byFile.get(m.parent), m.owner, m.line), ...m.middleware]
-			}))
+			contexts(m.parent, new Set(seen)).map(ctx => {
+				const local = localContext(byFile.get(m.parent), m.owner)
+				return {
+					prefix: joinPath(joinPath(ctx.prefix, local.prefix), m.prefix),
+					middleware: [
+						...ctx.middleware,
+						...local.middleware,
+						...inheritedUses(byFile.get(m.parent), m.owner, m.line),
+						...m.middleware
+					]
+				}
+			})
 		)
 	}
 
@@ -279,10 +321,16 @@ export function mapRoutes(root) {
 		for (const route of scan.routes) {
 			const handler = resolveHandler(scan, route.handlerNode)
 			for (const ctx of contexts(scan.file)) {
-				const middleware = [...ctx.middleware, ...inheritedUses(scan, route.owner, route.line), ...route.middleware]
+				const local = localContext(scan, route.owner)
+				const middleware = [
+					...ctx.middleware,
+					...local.middleware,
+					...inheritedUses(scan, route.owner, route.line),
+					...route.middleware
+				]
 				const entry = {
 					method: route.method,
-					path: joinPath(ctx.prefix, route.path),
+					path: joinPath(joinPath(ctx.prefix, local.prefix), route.path),
 					middleware,
 					handler: route.handler,
 					...classify(middleware),

@@ -21,6 +21,10 @@ test("mapper joins mount prefixes and finds every route", () => {
 	assert.equal(routes.filter(r => r.path.startsWith("/api/users")).length, 4)
 })
 
+test("mapper keeps the prefix of a router built and mounted in the same file", () => {
+	assert.ok(route("POST", "/v2/signup"))
+})
+
 test("mapper carries mount-level middleware into the router's routes", () => {
 	assert.deepEqual(route("GET", "/api/private").middleware, ["auth"])
 	assert.equal(route("GET", "/api/private").auth, true)
