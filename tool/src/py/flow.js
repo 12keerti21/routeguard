@@ -168,7 +168,9 @@ export function tracePy(route, requestIds = []) {
 			if (/check_object_permissions|has_object_permission/.test(topName)) result.guarded = true
 			if (CALLER_ACTION.test(topName) && hasCaller && !isIdentity(top)) result.callerAction = true
 			if (/^(create|insert|insert_one|add|bulk_create|save)$|^(create|insert|add)_/.test(topName)) result.creates = true
-			if (!hasId) return
+			// UpdateActionType.do(request.user, integration): the record and the caller go on together, so follow them
+			const handsOn = !hasId && hasRecord && hasCaller
+			if (!hasId && !handsOn) return
 			if (LOG_CALL.test(topName)) return
 			const receiver = field(top, "function")?.text ?? ""
 			const isDb = (DB_METHOD.test(topName) && DB_RECEIVER.test(receiver)) || DB_FN.test(topName)
@@ -207,6 +209,9 @@ export function tracePy(route, requestIds = []) {
 				}
 				return
 			}
+			// a service we cannot open that gets the caller with the record or id is trusted to check them, as a caller action is
+			if (hasCaller && !isIdentity(top) && !/render|jsonify|response|serializ|dump|format|template|print|log/i.test(topName)) result.callerAction = true
+			if (handsOn) return
 			if (RECORD_SERVICE.test(topName) || DB_METHOD.test(topName)) {
 				if (DB_METHOD.test(topName) && !DB_RECEIVER.test(receiver) && !RECORD_SERVICE.test(topName)) return
 				result.sinks.push({ method: topName, line: lineOf(top), file, chain, scoped: ownerInQuery })

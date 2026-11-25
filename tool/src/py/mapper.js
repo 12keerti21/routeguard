@@ -376,8 +376,12 @@ export async function mapPyRoutes(root) {
 		seen.add(key)
 		return true
 	})
+	// a urls.py mapped on its own before its parent's include reached it: keep the copy with the prefix
+	const byView = new Map()
+	for (const r of unique) byView.set(`${r.method} ${r.file}:${r.line}`, [...(byView.get(`${r.method} ${r.file}:${r.line}`) ?? []), r.path])
+	const prefixed = unique.filter(r => r.framework !== "django" || !byView.get(`${r.method} ${r.file}:${r.line}`).some(p => p.length > r.path.length && p.endsWith(r.path)))
 	routes.length = 0
-	routes.push(...unique)
+	routes.push(...prefixed)
 	Object.defineProperty(routes, "pyContext", { value: ctx })
 	return routes
 

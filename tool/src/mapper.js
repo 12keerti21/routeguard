@@ -33,7 +33,7 @@ const PERMISSION_CALL = /(^|\.)(auth|authori[sz]e|permit|allow|can|requires?|gua
 // matched against a function's own name: isAuthenticated, checkAuth, auth.jwt, verifyToken, apiAuth
 // but not jwtChallenges or updateAuthenticatedUsers
 const AUTH =
-	/^((is|ensure|require|check|verify|validate)_?)?((api_?)?auth\w*|jwt|token|api_?key|log(ged)?_?in|protect(ed)?|guard)$|auth$|^(is|ensure|require|check|verify|validate)_?(session|user|signed_?in)\w*$/i
+	/^((is|ensure|require|check|verify|validate)_?)?((api_?)?auth\w*|jwt|token|api_?key|log(ged)?_?in|protect(ed)?|guard)$|auth$|auth(enticate|entication)?_?(middleware|guard)$|^(is|ensure|require|check|verify|validate)_?(session|user|signed_?in)\w*$/i
 // auth.required, passport.check: the last segment says little, so the whole name decides
 const GENERIC = /^(required|check|ensure|verify|middleware|guard|protect|handler|validate)$/i
 // present in the chain but enforces nothing
@@ -249,6 +249,12 @@ function scanFile(file) {
 		if (node.type === "VariableDeclarator" && node.id.type === "Identifier" && node.init?.type === "ArrayExpression")
 			arrays.set(node.id.name, node.init.elements)
 	})
+	// return client.get(url, config), await api.post(url, data), http.get(url).then(…): an HTTP client call, not a route
+	const consumed = new Set()
+	walk(ast, node => {
+		if ((node.type === "ReturnStatement" || node.type === "AwaitExpression") && isCallNode(node.argument)) consumed.add(node.argument)
+		if (isMemberNode(node) && ["then", "catch", "finally"].includes(node.property?.name) && isCallNode(node.object)) consumed.add(node.object)
+	})
 	const chainRoot = object => {
 		const root = chainRootNode(object)
 		return chainOwners.get(root) ?? nameOf(root)
@@ -383,6 +389,7 @@ function scanFile(file) {
 		}
 
 		if (!METHODS.has(method)) return
+		if (consumed.has(node) && !isFunctionNode(unwrapHandler(node.arguments.at(-1))) && !/router|^app$|server/i.test(nameOf(chainRootNode(node.callee.object)) ?? "")) return
 		if (routePath !== null && rest.length > 0) {
 			if (!handlerLike(rest.at(-1))) return
 			result.routes.push(routeEntry(owner, method, routePath, rest, line))
@@ -441,7 +448,8 @@ function matches(pattern, middleware) {
 
 export function classify(middleware) {
 	const enforced = middleware.filter(m => !NOT_ENFORCED.test(m))
-	const role = enforced.some(m => matches(ROLE, m) || PERMISSION_CALL.test(m))
+	// createAuthMiddleware(config, "credentials:read"): a login that demands a scope
+	const role = enforced.some(m => matches(ROLE, m) || PERMISSION_CALL.test(m) || (matches(AUTH, m) && /[(,]\s*[\w-]+:[\w-]+\s*[,)]/.test(m)))
 	const auth = role || enforced.some(m => matches(AUTH, m))
 	return { auth, role }
 }

@@ -23,7 +23,7 @@ export function bolaPy(route) {
 	// the id may come in the body or the query instead: {"id": 5}, ?order_id=5
 	const bodyIds = route.py.fn?.node ? requestIds(route.py.fn.node) : []
 	if ((!/\{\w+\}/.test(route.path) && !bodyIds.length) || hasRole(route)) return null
-	if (!route.auth && route.method === "GET") return null
+	if (!route.auth && (route.method === "GET" || route.method === "HEAD")) return null
 	const params = route.path.match(/\{(\w+)\}/g)?.map(p => p.slice(1, -1)) ?? []
 	if (params.length && params.every(p => SECRET_PARAM.test(p))) return null
 	// /badge/{badge_key}/{signature}: an unguessable key or signature in a public link is its credential
@@ -38,7 +38,8 @@ export function bolaPy(route) {
 	const finding = (at, message) => ({
 		rule: "BOLA",
 		owasp: !route.auth ? "API1/API2: no auth at all" : write ? "API1:2023 BOLA, or API5:2023 BFLA if this is a shared record only admins should change" : "API1:2023 Broken Object Level Authorization",
-		severity: !route.auth || write ? "HIGH" : "MEDIUM",
+		// a signed-in user who must already know a random UUID: real, but hard to reach
+		severity: !route.auth || (write && !randomIds(route)) ? "HIGH" : "MEDIUM",
 		route: `${route.method} ${route.path}`,
 		where: at,
 		message,
@@ -298,3 +299,8 @@ export function ssrfPy(route) {
 }
 
 export const PY_RULES = [bolaPy, bflaPy, massAssignmentPy, dataExposurePy, ssrfPy]
+
+const randomIds = route => {
+	const params = (route.path.match(/[:{<](?:\w+:)?(\w+)/g) ?? []).map(p => p.replace(/^[:{<](\w+:)?/, ""))
+	return params.length > 0 && params.filter(p => RECORD_PARAM.test(p)).every(p => /uuid|guid/i.test(p))
+}
