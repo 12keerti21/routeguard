@@ -3,6 +3,7 @@ const auth = require("./middleware/auth")
 const notes = require("./routes/notes")
 const users = require("./routes/users")
 const shop = require("./routes/shop")
+const courses = require("./routes/courses")
 
 const app = express()
 app.use(express.json())
@@ -10,6 +11,7 @@ app.use("/api/notes", notes)
 app.use("/api/users", users)
 app.use("/api/private", auth, notes)
 app.use("/rest", shop)
+app.use("/api/courses", courses)
 
 // a router built here and mounted under a prefix
 const v2 = express.Router().use(users)

@@ -58,6 +58,7 @@ Nine open-source Express apps, 438 routes, run 2026-11-25.
 - ✅ `GET /rest/basket/:id`: the known "View Basket" BOLA challenge
 - ✅ `GET /metrics`: the known "Exposed Metrics" challenge
 - ✅ `PUT /api/BasketItems/:id`: the item is fetched by id alone; the caller is read only for a challenge check
+- ✅ `POST /rest/basket/:id/checkout`: checks out any basket by id and empties it; the caller is used only for the order's email (found once BOLA followed calls)
 - ⚠️ `GET /rest/admin/application-configuration` and `/application-version`: public by design, but they expose config under an admin path
 
 **False positives fixed along the way** (each now has a test):
@@ -69,6 +70,9 @@ Nine open-source Express apps, 438 routes, run 2026-11-25.
 - caller identity from `const { user } = req`, helpers like `authenticatedUsers.from(req)`, and `appendUserId()` middleware
 - BOLA needs the caller in the query or an `if`, not just read somewhere
 - role checks inside the handler (`requireAdmin(req, res)`), a secret in the URL (`/reset/:token`) or in the body (a link password)
+- following calls into services: `if (!user)` checks login, not ownership, so a guard must compare the caller with what the id reached
+- callbacks passed as arguments (`solveIf(() => user.bid != id)`) are not values
+- reading a public parent to create the caller's own record (RealWorld's add-comment) is fine; an unscoped write next to it is not
 
 ## Next
 

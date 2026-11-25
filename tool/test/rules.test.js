@@ -17,7 +17,7 @@ const route = (method, routePath) => {
 }
 
 test("mapper joins mount prefixes and finds every route", () => {
-	assert.equal(routes.filter(r => r.path.startsWith("/api/notes")).length, 7)
+	assert.equal(routes.filter(r => r.path.startsWith("/api/notes")).length, 8)
 	assert.equal(routes.filter(r => r.path.startsWith("/api/users")).length, 4)
 })
 
@@ -95,6 +95,33 @@ test("BOLA passes a handler that checks the role inline", () => {
 
 test("handlers imported through package.json subpath imports are read", () => {
 	assert.equal(bola(route("GET", "/api/notes/reports/:id"))?.rule, "BOLA")
+})
+
+test("BOLA follows the caller into a service that never uses it", () => {
+	const finding = bola(route("GET", "/api/courses/:courseId"))
+	assert.equal(finding?.rule, "BOLA")
+	assert.match(finding.where, /services\/course\.service\.js:5$/)
+	assert.match(finding.message, /via getCourse/)
+})
+
+test("BOLA passes a service whose owner check sits two calls down, through destructured arguments", () => {
+	assert.equal(bola(route("PUT", "/api/courses/:courseId")), null)
+})
+
+test("BOLA passes reading a parent to create the caller's own record", () => {
+	assert.equal(bola(route("POST", "/api/courses/:courseId/reviews")), null)
+})
+
+test("BOLA still flags an unscoped delete next to the caller's own record", () => {
+	const finding = bola(route("POST", "/api/courses/:courseId/checkout"))
+	assert.equal(finding?.rule, "BOLA")
+	assert.match(finding.message, /^destroy/)
+})
+
+test("a routeguard-ignore comment marks the route's suppressed rules", () => {
+	const r = route("GET", "/api/notes/shared/:shareId")
+	assert.ok(r.ignored.has("BOLA"))
+	assert.equal(route("GET", "/api/notes/:id").ignored, null)
 })
 
 test("no rule fires on the public list route", () => {

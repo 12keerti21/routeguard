@@ -38,4 +38,10 @@ router.get("/", async (req, res) => {
 
 router.get("/reports/:id", auth, getReport)
 
+// the share id is unguessable and is the key
+// routeguard-ignore BOLA
+router.get("/shared/:shareId", auth, async (req, res) => {
+	res.send(await Note.findOne({ shareId: req.params.shareId }))
+})
+
 module.exports = router
