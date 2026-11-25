@@ -1,0 +1,42 @@
+name: routeguard
+description: Map Express routes to their auth checks and flag OWASP API Top 10 authorisation risks
+branding:
+  icon: shield
+  color: blue
+
+inputs:
+  path:
+    description: Folder of the Express app to scan
+    default: "."
+  fail-on:
+    description: Fail the step for findings at or above this severity (LOW, MEDIUM, HIGH)
+    default: HIGH
+  sarif-file:
+    description: Where to write the SARIF report, for github/codeql-action/upload-sarif
+    default: routeguard.sarif
+
+outputs:
+  sarif-file:
+    description: Path of the SARIF report
+    value: ${{ inputs.sarif-file }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install routeguard
+      shell: bash
+      run: npm ci --omit=dev --prefix "$GITHUB_ACTION_PATH/tool"
+
+    - name: Scan
+      shell: bash
+      env:
+        SCAN_PATH: ${{ inputs.path }}
+        FAIL_ON: ${{ inputs.fail-on }}
+        SARIF_FILE: ${{ inputs.sarif-file }}
+      # inputs go through env, never straight into the script, so a crafted input cannot run commands
+      run: |
+        set +e
+        node "$GITHUB_ACTION_PATH/tool/bin/cli.js" "$SCAN_PATH" --sarif --fail-on "$FAIL_ON" > "$SARIF_FILE"
+        status=$?
+        node "$GITHUB_ACTION_PATH/tool/bin/cli.js" "$SCAN_PATH" --fail-on "$FAIL_ON" | sed -n '/^FINDINGS/,$p'
+        exit $status
