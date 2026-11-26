@@ -74,6 +74,18 @@ test("drf: delegated checks, a urls.py reached through include, replaced secrets
 	assert.ok(!findings.some(f => /signature/.test(f.message)), "a decode whose result nobody reads decides nothing")
 })
 
+test("django: splatted and reassigned urlpatterns, decorate_urlpatterns, membership checks and parent lookups", async () => {
+	const { byRoute, findings, has } = await scan("django-site")
+	assert.ok(byRoute.has("PATCH /api/boards/{anchor}/assets/{pk}"), "[*board_urls] from an imported urlpatterns, kept after urlpatterns = [debug] + urlpatterns")
+	assert.equal(byRoute.get("ALL /admin/bulk/{model_name}/{pk}").role, true, "decorate_urlpatterns(urlpatterns, require_admin_access)")
+	assert.equal(byRoute.get("PATCH /api/projects/{pk}").role, true, "@allow_permission on a ViewSet action")
+	assert.ok(!has("BOLA", "DELETE /api/projects/{pk}"), "ProjectMember.objects.filter(member=request.user, project_id=pk).exists()")
+	assert.ok(!has("BOLA", "PATCH /api/boards/{anchor}/assets/{pk}"), "the asset is the caller's; the board is a public parent")
+	assert.ok(has("BOLA", "DELETE /api/boards/{anchor}/assets/{pk}"))
+	assert.ok(!has("BOLA", "GET /api/assets/{asset_id}"), "bookmark_read(request, asset.bookmark_id) checks the owner")
+	assert.equal(findings.find(f => f.rule === "SSRF").severity, "MEDIUM", "both URLs the variable can hold have a fixed host")
+})
+
 test("a directory with no Python files maps no Python routes", async () => {
 	assert.equal((await mapPyRoutes(new URL("./fixtures/app", import.meta.url).pathname)).length, 0)
 })
