@@ -1,7 +1,7 @@
 import path from "node:path"
 import { walk, isMemberNode } from "../mapper.js"
 import { traceRoute } from "../flow.js"
-import { RECORD_ACCESS, checksBodyCredential, dbCalls, handlerParams, hasRole, isMember, whereOf } from "./handler.js"
+import { RECORD_ACCESS, checksBodyCredential, dbCalls, decoratedParams, handlerParams, hasRole, isMember, whereOf } from "./handler.js"
 
 // /:courseId, /:pk, /:slug, /:username name a record; /:provider, /:chunk, /:lang do not
 const RECORD_PARAM = /(id|ids|uuid|guid|pk|key|slug|code|token|hash|ref|no|num|number|name|user|email|handle|sid)$/i
@@ -9,7 +9,7 @@ const SECRET_PARAM = /token|code|hash|secret|otp|nonce|signature|key|session/i
 
 // names that carry a value from req.params: const id = req.params.id, const { id } = req.params
 function paramDerivedNames(fn, req) {
-	const names = new Set()
+	const names = new Set(decoratedParams(fn).ids)
 	walk(fn.body, node => {
 		if (node.type !== "VariableDeclarator" || !node.init) return
 		const fromParams =
@@ -38,6 +38,8 @@ export function bola(route) {
 	if (!/[:{]/.test(route.path) || !route.fn || hasRole(route)) return null
 	// an unauthenticated read is usually a public catalogue on purpose (books, products)
 	if (!route.auth && (route.method === "GET" || route.method === "HEAD")) return null
+	// a webhook receiver proves the sender by a signature in the request, not by a session
+	if (!route.auth && /\/webhooks?(\/|$)/i.test(route.path)) return null
 	// /reset/:token, /verify/:code: an unguessable secret in the URL is the authorisation
 	const params = route.path.match(/[:{](\w+)/g)?.map(p => p.slice(1)) ?? []
 	if (params.length && params.every(p => SECRET_PARAM.test(p))) return null

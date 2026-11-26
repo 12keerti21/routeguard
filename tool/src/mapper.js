@@ -26,8 +26,9 @@ const SOURCE = /\.(c|m)?(j|t)s$/
 // isAuthorized() only checks login; authorize(ADMIN) with an argument names a role
 // isAccounting(), isStaff(): an "is" check that is not about being signed in
 // requireGroupMemberManagement, ensureProjectAccess, checkOwner: a named check on a right, not on login
+// scimAuth: a provisioning token only the identity provider holds
 const ROLE =
-	/admin|role|permission|owner|rbac|acl|can[A-Z]|scope|^is_?(?!auth|logged|signed|valid|verified)[a-z]+$|^(require|ensure|check|assert|verify)_?\w*(manag|access|member|owner|permission|role|staff|privilege|collaborat)/i
+	/admin|role|scim|permission|owner|rbac|acl|can[A-Z]|scope|^is_?(?!auth|logged|signed|valid|verified)[a-z]+$|^(require|ensure|check|assert|verify)_?\w*(manag|access|member|owner|permission|role|staff|privilege|collaborat)/i
 // auth('manageUsers'), permit('editor'): a guard called with the right it demands
 const PERMISSION_CALL = /(^|\.)(auth|authori[sz]e|permit|allow|can|requires?|guard)\((?!\))/i
 // matched against a function's own name: isAuthenticated, checkAuth, auth.jwt, verifyToken, apiAuth
@@ -263,6 +264,8 @@ function scanFile(file) {
 	walk(ast, node => {
 		// named handlers: function getBook() {}, const getBook = () => {}, const getBook = catchAsync(() => {})
 		if (node.type === "FunctionDeclaration" && node.id) result.functions.set(node.id.name, node)
+		// this.loadThread(req) inside a controller class
+		if (node.type === "ClassMethod" && node.key?.type === "Identifier" && !result.functions.has(node.key.name)) result.functions.set(node.key.name, node)
 		if (node.type === "VariableDeclarator" && node.id.type === "Identifier" && node.init) {
 			const fn = unwrapHandler(node.init)
 			if (isFunctionNode(fn)) result.functions.set(node.id.name, fn)
@@ -331,6 +334,16 @@ function scanFile(file) {
 				if (s.type === "ImportSpecifier") result.named.set(s.local.name, { file: target, name: s.imported.name ?? s.imported.value })
 			}
 		}
+
+		if ((node.type === "ClassDeclaration" || node.type === "ClassExpression") && node.decorators?.length) {
+			const routes = decoratedRoutes(node)
+			result.routes.push(...routes)
+			if (routes.length) result.frameworks.add("decorators")
+		}
+		// providers: [{ provide: APP_GUARD, useClass: JwtAuthGuard }], app.useGlobalGuards(...): every route is guarded
+		if (node.type === "Identifier" && node.name === "APP_GUARD") result.globalGuard = true
+		if (isCallNode(node) && isMemberNode(node.callee) && node.callee.property.name === "useGlobalGuards") result.globalGuard = true
+		if (isCallNode(node) && isMemberNode(node.callee) && node.callee.property.name === "setGlobalPrefix") result.globalPrefix = stringValue(node.arguments[0])
 
 		if (!isCallNode(node) || !isMemberNode(node.callee)) return
 		const method = node.callee.property.name
@@ -403,6 +416,73 @@ function scanFile(file) {
 		if (chainPath !== null && node.arguments.length > 0) result.routes.push(routeEntry(owner, method, chainPath, node.arguments, line))
 	})
 	return result
+}
+
+// @Controller("users") class UsersController { @Get(":id") findOne(@Param("id") id) {} }
+// NestJS, routing-controllers, and n8n's @RestController (signed in unless skipAuth, mounted at /rest)
+const CONTROLLER = { Controller: "", JsonController: "", RestController: "/rest", RootLevelController: "", PublicApiController: "/api/v1" }
+const SIGNED_IN_BY_DEFAULT = { RestController: "authenticated", RootLevelController: "authenticated", PublicApiController: "apiKeyAuth" }
+const ROUTE_DECORATOR = { Get: "get", Post: "post", Put: "put", Patch: "patch", Delete: "delete", All: "all", Options: "options", Head: "head" }
+// docs, serialisation and plumbing say nothing about who may call the route
+const DECORATOR_NOISE = /^(Api(?!KeyScope)[A-Z]\w*|HttpCode|Header|Redirect|Render|Version|Deprecated|Licensed|Use(Interceptors|Pipes|Filters)|SerializeOptions|Sse|OnPubSubEvent|Injectable|Service)$/
+// @Public(), @SkipAuth(): the route opts out of a global guard
+const PUBLIC_DECORATOR = /^(Public|IsPublic|SkipAuth|NoAuth|AllowAnonymous|Anonymous|Unauthenticated)$/i
+
+const decoratorCallee = d => (isCallNode(d.expression) ? d.expression.callee : d.expression)
+const decoratorName = d => {
+	const callee = decoratorCallee(d)
+	return (isMemberNode(callee) ? callee.property.name : callee.name) ?? ""
+}
+
+// what a decorator puts in front of the handler: @UseGuards(JwtGuard, RolesGuard) is two guards
+function decoratorMiddleware(decorators) {
+	const out = []
+	for (const d of decorators ?? []) {
+		const name = decoratorName(d)
+		if (name in CONTROLLER || name in ROUTE_DECORATOR || DECORATOR_NOISE.test(name)) continue
+		if (name === "UseGuards" && isCallNode(d.expression)) {
+			out.push(...flattenMiddleware(d.expression.arguments.map(a => (a.type === "NewExpression" ? a.callee : a))))
+			continue
+		}
+		const label = nameOf(d.expression)
+		if (label) out.push(label)
+	}
+	return out
+}
+
+function decoratedRoutes(cls) {
+	const controller = cls.decorators?.find(d => decoratorName(d) in CONTROLLER)
+	if (!controller) return []
+	const kind = decoratorName(controller)
+	const arg = isCallNode(controller.expression) ? controller.expression.arguments[0] : null
+	const base = stringValue(arg) ?? stringValue(arg?.properties?.find(p => p.key?.name === "path")?.value) ?? ""
+	const classMiddleware = decoratorMiddleware(cls.decorators)
+	const classPublic = cls.decorators.some(d => PUBLIC_DECORATOR.test(decoratorName(d)))
+	const routes = []
+	for (const member of cls.body.body) {
+		if (member.type !== "ClassMethod" || !member.decorators) continue
+		for (const d of member.decorators) {
+			const method = ROUTE_DECORATOR[decoratorName(d)]
+			if (!method) continue
+			const [pathArg, options] = isCallNode(d.expression) ? d.expression.arguments : []
+			const paths = pathArg?.type === "ArrayExpression" ? pathArg.elements.map(stringValue) : [stringValue(pathArg) ?? ""]
+			const middleware = [...classMiddleware, ...decoratorMiddleware(member.decorators)]
+			const open = classPublic || member.decorators.some(x => PUBLIC_DECORATOR.test(decoratorName(x)))
+			for (const routePath of paths.filter(p => p !== null))
+				routes.push({
+					guards: [],
+					owner: `@${cls.id?.name ?? "controller"}`,
+					method: method.toUpperCase(),
+					path: joinPath(joinPath(CONTROLLER[kind], base), routePath),
+					middleware: [...middleware],
+					handler: `${cls.id?.name ?? "?"}.${member.key.name ?? "?"}`,
+					handlerNode: member,
+					line: d.loc.start.line,
+					decorated: { open, kind, options }
+				})
+		}
+	}
+	return routes
 }
 
 // what can end a route: a function, a name for one, or a call that builds one; never data
@@ -680,6 +760,8 @@ export function mapRoutes(root) {
 			const fn = byFile.get(imported?.file)?.functions.get(imported.name)
 			return fn ? { fn, file: imported.file } : null
 		}
+		if (isMemberNode(target) && target.object.type === "ThisExpression")
+			return scan.functions.has(target.property.name) ? { fn: scan.functions.get(target.property.name), file: scan.file } : null
 		if (isMemberNode(target) && target.object.type === "Identifier") {
 			const file = scan.requires.get(target.object.name) ?? scan.named.get(target.object.name)?.file
 			// HistoryController.remove, with the controller defined in this file
@@ -704,12 +786,36 @@ export function mapRoutes(root) {
 		return found?.fn?.body ? found : null
 	}
 
+	// NestJS: a guard registered for the whole app, and app.setGlobalPrefix("api")
+	const globalGuard = scans.some(s => s.globalGuard)
+	const globalPrefix = scans.find(s => s.globalPrefix)?.globalPrefix ?? ""
+
+	// n8n: @Post("/login", { skipAuth: true, ipRateLimit: true, middlewares: [...] }), the options maybe imported
+	function decorate(scan, route) {
+		const { kind, options } = route.decorated
+		route.decorated.done = true
+		const object = options?.type === "ObjectExpression" ? { get: key => options.properties.find(p => p.key?.name === key)?.value } : options ? evaluateObject(scan.file, options) : null
+		const option = key => (object?.module ? null : object?.get(key))
+		const open = route.decorated.open || ["skipAuth", "allowUnauthenticated"].some(k => option(k)?.value === true)
+		if (["rateLimit", "ipRateLimit", "keyedRateLimit"].some(k => option(k))) route.middleware.push("rateLimit")
+		if (option("apiKeyAuth")?.value === true) route.middleware.push("apiKeyAuth")
+		if (option("middlewares")) route.middleware.push(...flattenMiddleware([option("middlewares")]))
+		if (SIGNED_IN_BY_DEFAULT[kind]) {
+			if (!open) route.middleware.unshift(SIGNED_IN_BY_DEFAULT[kind])
+			return
+		}
+		route.path = joinPath(globalPrefix, route.path)
+		if (globalGuard && !open) route.middleware.unshift("globalAuthGuard")
+	}
+
 	const routes = []
 	for (const scan of scans) {
 		for (const route of scan.routes) {
 			const handler = resolveHandler(scan, route.handlerNode)
-			const local = localContext(scan, route.owner)
-			for (const ctx of contexts(scan.file, local.owner)) {
+			const local = route.decorated ? { prefix: "", middleware: [], owner: route.owner } : localContext(scan, route.owner)
+			if (route.decorated && !route.decorated.done) decorate(scan, route)
+			const routeContexts = route.decorated ? [{ prefix: "", middleware: [], anchored: true, rootFile: scan.file }] : contexts(scan.file, local.owner)
+			for (const ctx of routeContexts) {
 				const middleware = [
 					...ctx.middleware,
 					...local.middleware,

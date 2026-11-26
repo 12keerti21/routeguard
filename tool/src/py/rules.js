@@ -264,9 +264,11 @@ export function ssrfPy(route) {
 	}
 	const hits = []
 	let checked = false
+	const values = new Map()
 	walk(body, n => {
 		if (n.type === "assignment") {
 			const left = field(n, "left")
+			if (left?.type === "identifier" && field(n, "right")) values.set(left.text, field(n, "right"))
 			const input = field(n, "right") && inputOf(field(n, "right"))
 			if (left?.type === "identifier" && input) tainted.set(left.text, input)
 		}
@@ -282,8 +284,17 @@ export function ssrfPy(route) {
 	})
 	if (!hits.length || checked) return null
 	const [hit] = hits
-	const lead = hit.arg.type === "string" ? hit.arg.text.replace(/^[fFrRbB]*['"]/, "") : hit.arg.type === "binary_operator" ? pyString(field(hit.arg, "left")) ?? "" : ""
-	const fixed = FIXED_HOST.test(lead)
+	// url = f"https://api.host/{q}" if q else f"https://api.host/", then requests.get(url)
+	const leadOf = (arg, depth = 0) => {
+		if (!arg || depth > 3) return [""]
+		if (arg.type === "identifier" && values.has(arg.text)) return leadOf(values.get(arg.text), depth + 1)
+		if (arg.type === "parenthesized_expression") return leadOf(arg.namedChildren[0], depth + 1)
+		if (arg.type === "conditional_expression") return [arg.namedChildren[0], arg.namedChildren[2]].flatMap(x => leadOf(x, depth + 1))
+		if (arg.type === "string") return [arg.text.replace(/^[fFrRbB]*['"]/, "")]
+		if (arg.type === "binary_operator") return [pyString(field(arg, "left")) ?? ""]
+		return [""]
+	}
+	const fixed = leadOf(hit.arg).every(lead => FIXED_HOST.test(lead))
 	return {
 		rule: "SSRF",
 		owasp: "API7:2023 Server Side Request Forgery",
